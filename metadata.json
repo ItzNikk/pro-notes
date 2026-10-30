@@ -1,0 +1,6 @@
+{
+  "name": "Pro Notes",
+  "description": "A professional dark-mode note-taking and document workspace with precision pen tools, customizable stroke stabilization, rich color palettes, lasso actions, and notebook management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
