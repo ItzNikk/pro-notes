@@ -1494,13 +1494,18 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
                   stroke.copy(
                     points = stroke.points.map(::transformPoint),
                     shapeControlPoints = stroke.shapeControlPoints.map(::transformPoint),
+                    strokeWidth = (stroke.strokeWidth * clampedScale).coerceIn(1.5f, 36f),
                   )
                 } else stroke
               },
             textBoxes =
               page.textBoxes.map { tb ->
-                if (selectedTexts.contains(tb.id)) tb.copy(position = transformPoint(tb.position))
-                else tb
+                if (selectedTexts.contains(tb.id)) {
+                  tb.copy(
+                    position = transformPoint(tb.position),
+                    fontSizeSp = (tb.fontSizeSp * clampedScale).coerceIn(9f, 52f),
+                  )
+                } else tb
               },
             elements =
               page.elements.map { el ->
@@ -1715,15 +1720,45 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       val newLassoLoop =
         if (state.lassoLoopPoints.isNotEmpty()) {
           state.lassoLoopPoints.map { it + shift }
-        } else if (pastedStrokes.isNotEmpty()) {
-          val allPts = pastedStrokes.flatMap { it.points }
-          val minX = allPts.minOf { it.x } - 14f
-          val maxX = allPts.maxOf { it.x } + 14f
-          val minY = allPts.minOf { it.y } - 14f
-          val maxY = allPts.maxOf { it.y } + 14f
-          listOf(Offset(minX, minY), Offset(maxX, minY), Offset(maxX, maxY), Offset(minX, maxY))
         } else {
-          emptyList()
+          val allPts = buildList {
+            pastedStrokes.forEach { addAll(it.points) }
+            pastedTexts.forEach {
+              add(it.position)
+              add(it.position + Offset(90f, 28f))
+            }
+            pastedElements.forEach {
+              add(it.position)
+              add(it.position + Offset(75f, 32f))
+            }
+            pastedStickies.forEach {
+              add(it.position)
+              add(it.position + Offset(120f, 75f))
+            }
+            pastedImages.forEach {
+              add(it.position)
+              add(it.position + Offset(it.widthDp * pxPerDp, it.heightDp * pxPerDp))
+            }
+          }
+          if (allPts.isNotEmpty()) {
+            val minX = allPts.minOf { it.x } - 16f
+            val maxX = allPts.maxOf { it.x } + 16f
+            val minY = allPts.minOf { it.y } - 16f
+            val maxY = allPts.maxOf { it.y } + 16f
+            val midX = (minX + maxX) / 2f
+            val midY = (minY + maxY) / 2f
+            val rx = ((maxX - minX) / 2f).coerceAtLeast(36f)
+            val ry = ((maxY - minY) / 2f).coerceAtLeast(28f)
+            (0..24).map { step ->
+              val angle = (step.toDouble() / 24.0) * 2.0 * Math.PI
+              Offset(
+                x = midX + (rx * cos(angle)).toFloat(),
+                y = midY + (ry * sin(angle)).toFloat(),
+              )
+            }
+          } else {
+            emptyList()
+          }
         }
 
       state.copy(
@@ -2656,7 +2691,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         updateCurrentPage(state) { page ->
           val strokeCopies =
             page.strokes
-              .filter { selectedStrokes.isEmpty() || selectedStrokes.contains(it.id) }
+              .filter { selectedStrokes.contains(it.id) }
               .map { s ->
                 val newId = java.util.UUID.randomUUID().toString()
                 newStrokeIds.add(newId)

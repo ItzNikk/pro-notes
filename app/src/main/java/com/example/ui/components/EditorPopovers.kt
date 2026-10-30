@@ -6,7 +6,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -1560,21 +1562,22 @@ fun LassoFloatingMenuPill(
     Row(
       modifier =
         Modifier
-          .height(44.dp)
-          .shadow(14.dp, RoundedCornerShape(22.dp))
-          .clip(RoundedCornerShape(22.dp))
-          .background(Color(0xFF1C1D22))
-          .border(1.dp, Color(0xFF383A42), RoundedCornerShape(22.dp))
+          .height(46.dp)
+          .shadow(14.dp, RoundedCornerShape(23.dp))
+          .clip(RoundedCornerShape(23.dp))
+          .background(Color(0xFF16171B))
+          .border(1.dp, Color(0xFF2B2D35), RoundedCornerShape(23.dp))
+          .horizontalScroll(rememberScrollState())
           .padding(horizontal = 10.dp)
           .testTag("lasso_floating_action_pill"),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(10.dp),
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
       // 1. Move Indicator / Layer Filters Icon
       Box(
         modifier =
           Modifier
-            .size(24.dp)
+            .size(28.dp)
             .clip(CircleShape)
             .background(Color(0xFF1A4FA0))
             .clickable(onClick = onOpenLassoFiltersClick),
@@ -1584,7 +1587,7 @@ fun LassoFloatingMenuPill(
           imageVector = Icons.Default.KeyboardArrowDown,
           contentDescription = "Lasso filter and layer options",
           tint = Color.White,
-          modifier = Modifier.size(15.dp),
+          modifier = Modifier.size(16.dp),
         )
       }
 
@@ -1592,16 +1595,18 @@ fun LassoFloatingMenuPill(
       Row(
         modifier =
           Modifier
-            .clip(RoundedCornerShape(6.dp))
+            .height(32.dp)
+            .clip(RoundedCornerShape(8.dp))
             .background(if (isColorMenuOpen) Color(0x3367C8EB) else Color.Transparent)
             .clickable(onClick = onToggleColorMenu)
-            .padding(horizontal = 4.dp, vertical = 2.dp),
+            .padding(horizontal = 6.dp)
+            .testTag("lasso_color_button"),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(2.dp),
       ) {
         Text(
           text = "A",
-          color = TextPrimaryWhite,
+          color = if (isColorMenuOpen) Color(0xFF67C8EB) else TextPrimaryWhite,
           fontSize = 15.sp,
           fontFamily = FontFamily.Serif,
           fontWeight = FontWeight.Bold,
@@ -1615,123 +1620,204 @@ fun LassoFloatingMenuPill(
       }
 
       // 3. Cut
-      Icon(
-        imageVector = Icons.Default.ContentCut,
-        contentDescription = "Cut selection",
-        tint = TextPrimaryWhite,
+      Box(
         modifier =
           Modifier
-            .size(18.dp)
+            .size(32.dp)
+            .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onCutClick)
             .testTag("lasso_cut_button"),
-      )
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Default.ContentCut,
+          contentDescription = "Cut selection",
+          tint = TextPrimaryWhite,
+          modifier = Modifier.size(18.dp),
+        )
+      }
 
       // 4. Copy
-      Icon(
-        imageVector = Icons.Outlined.ContentCopy,
-        contentDescription = "Copy selection",
-        tint = TextPrimaryWhite,
+      Box(
         modifier =
           Modifier
-            .size(18.dp)
+            .size(32.dp)
+            .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onCopyClick)
             .testTag("lasso_copy_button"),
-      )
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Outlined.ContentCopy,
+          contentDescription = "Copy selection",
+          tint = TextPrimaryWhite,
+          modifier = Modifier.size(18.dp),
+        )
+      }
 
       // 5. Paste
-      Icon(
-        imageVector = Icons.Outlined.ContentPaste,
-        contentDescription = "Paste from clipboard",
-        tint = if (hasClipboardContent) Color(0xFF67C8EB) else TextSecondaryGray.copy(alpha = 0.5f),
+      Box(
         modifier =
           Modifier
-            .size(18.dp)
+            .size(32.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (hasClipboardContent) Color(0x2267C8EB) else Color.Transparent)
             .clickable(enabled = hasClipboardContent, onClick = onPasteClick)
             .testTag("lasso_paste_button"),
-      )
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Outlined.ContentPaste,
+          contentDescription = "Paste from clipboard",
+          tint = if (hasClipboardContent) Color(0xFF67C8EB) else TextSecondaryGray.copy(alpha = 0.45f),
+          modifier = Modifier.size(18.dp),
+        )
+      }
 
       // 6. Resize Mode Toggle
-      Icon(
-        imageVector = Icons.Outlined.PhotoSizeSelectSmall,
-        contentDescription = "Resize & Rotate selection",
-        tint = if (isResizeModeActive) Color(0xFF67C8EB) else TextPrimaryWhite,
+      Box(
         modifier =
           Modifier
-            .size(19.dp)
+            .size(32.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (isResizeModeActive) Color(0x3367C8EB) else Color.Transparent)
             .clickable(onClick = onResizeToggleClick)
             .testTag("lasso_resize_button"),
-      )
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Outlined.PhotoSizeSelectSmall,
+          contentDescription = "Resize & Rotate selection",
+          tint = if (isResizeModeActive) Color(0xFF67C8EB) else TextPrimaryWhite,
+          modifier = Modifier.size(19.dp),
+        )
+      }
 
       // 7. Quick Scale Down (-) and Up (+)
       Row(
         modifier =
           Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(Color(0xFF2B2D35))
-            .padding(horizontal = 4.dp, vertical = 2.dp),
+            .height(30.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFF25272E))
+            .border(1.dp, Color(0xFF343741), RoundedCornerShape(8.dp))
+            .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
       ) {
-        Icon(
-          imageVector = Icons.Default.Remove,
-          contentDescription = "Scale Down",
-          tint = TextPrimaryWhite,
-          modifier = Modifier.size(14.dp).clickable { onScaleStepClick(false) },
+        Box(
+          modifier =
+            Modifier
+              .size(24.dp)
+              .clip(RoundedCornerShape(6.dp))
+              .clickable { onScaleStepClick(false) }
+              .testTag("lasso_scale_down_button"),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Remove,
+            contentDescription = "Scale Down",
+            tint = TextPrimaryWhite,
+            modifier = Modifier.size(14.dp),
+          )
+        }
+        Text(
+          text = "Size",
+          color = TextSecondaryGray,
+          fontSize = 10.sp,
+          fontWeight = FontWeight.Medium,
         )
-        Text(text = "Size", color = TextSecondaryGray, fontSize = 9.5.sp)
-        Icon(
-          imageVector = Icons.Default.Add,
-          contentDescription = "Scale Up",
-          tint = TextPrimaryWhite,
-          modifier = Modifier.size(14.dp).clickable { onScaleStepClick(true) },
-        )
+        Box(
+          modifier =
+            Modifier
+              .size(24.dp)
+              .clip(RoundedCornerShape(6.dp))
+              .clickable { onScaleStepClick(true) }
+              .testTag("lasso_scale_up_button"),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Add,
+            contentDescription = "Scale Up",
+            tint = TextPrimaryWhite,
+            modifier = Modifier.size(14.dp),
+          )
+        }
       }
 
       // 8. Duplicate
-      Icon(
-        imageVector = Icons.Outlined.LibraryAdd,
-        contentDescription = "Duplicate selection",
-        tint = TextPrimaryWhite,
+      Box(
         modifier =
           Modifier
-            .size(18.dp)
+            .size(32.dp)
+            .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onDuplicateClick)
             .testTag("lasso_duplicate_button"),
-      )
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Outlined.LibraryAdd,
+          contentDescription = "Duplicate selection",
+          tint = TextPrimaryWhite,
+          modifier = Modifier.size(18.dp),
+        )
+      }
 
       // 9. AI Handwriting Assist
-      Text(
-        text = "AI",
-        color = TextPrimaryWhite,
-        fontSize = 13.5.sp,
-        fontFamily = FontFamily.Serif,
-        fontWeight = FontWeight.Bold,
-        modifier = Modifier.clickable(onClick = onConvertAiTextClick),
-      )
+      Box(
+        modifier =
+          Modifier
+            .height(32.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onConvertAiTextClick)
+            .padding(horizontal = 6.dp),
+        contentAlignment = Alignment.Center,
+      ) {
+        Text(
+          text = "AI",
+          color = TextPrimaryWhite,
+          fontSize = 13.5.sp,
+          fontFamily = FontFamily.Serif,
+          fontWeight = FontWeight.Bold,
+        )
+      }
 
       // 10. Delete
-      Icon(
-        imageVector = Icons.Outlined.DeleteOutline,
-        contentDescription = "Delete selection",
-        tint = DangerRed,
+      Box(
         modifier =
           Modifier
-            .size(20.dp)
+            .size(32.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(DangerRed.copy(alpha = 0.14f))
             .clickable(onClick = onDeleteClick)
             .testTag("lasso_delete_button"),
-      )
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Outlined.DeleteOutline,
+          contentDescription = "Delete selection",
+          tint = DangerRed,
+          modifier = Modifier.size(19.dp),
+        )
+      }
 
       // 11. Dismiss
-      Icon(
-        imageVector = Icons.Default.Close,
-        contentDescription = "Dismiss selection",
-        tint = TextSecondaryGray,
+      Box(
         modifier =
           Modifier
-            .size(18.dp)
+            .size(30.dp)
+            .clip(RoundedCornerShape(8.dp))
             .clickable(onClick = onDismissLassoClick)
             .testTag("lasso_dismiss_button"),
-      )
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Default.Close,
+          contentDescription = "Dismiss selection",
+          tint = TextSecondaryGray,
+          modifier = Modifier.size(17.dp),
+        )
+      }
     }
   }
 }

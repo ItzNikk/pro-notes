@@ -53,6 +53,7 @@ import androidx.compose.material.icons.filled.DragIndicator
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.outlined.Colorize
+import androidx.compose.material.icons.outlined.ContentPaste
 import androidx.compose.material.icons.outlined.Draw
 import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.MicNone
@@ -440,6 +441,7 @@ fun EditorScreen(
 
   // Keep pagerState synced when user selects a page from sidebar or adds a new page
   LaunchedEffect(currentPageIdx, pages.size) {
+    canvasPanOffset = Offset.Zero
     if (pagerState.currentPage != currentPageIdx && currentPageIdx in 0 until pages.size) {
       pagerState.animateScrollToPage(currentPageIdx)
     }
@@ -448,6 +450,7 @@ fun EditorScreen(
   // Keep ViewModel synced when pager settles on a new page via horizontal/vertical swipe
   LaunchedEffect(pagerState.settledPage) {
     if (pagerState.settledPage != currentPageIdx && pagerState.settledPage in pages.indices) {
+      canvasPanOffset = Offset.Zero
       onSelectPageIndex(pagerState.settledPage)
     }
   }
@@ -456,11 +459,13 @@ fun EditorScreen(
   fun navigateByPageSwipe(deltaPage: Int) {
     val target = currentPageIdx + deltaPage
     if (target in pages.indices) {
+      canvasPanOffset = Offset.Zero
       coroutineScope.launch {
         pagerState.animateScrollToPage(target)
       }
       onSelectPageIndex(target)
     } else if (target >= pages.size && deltaPage > 0 && pullToAddPage) {
+      canvasPanOffset = Offset.Zero
       onAddNewPage()
     }
   }
@@ -633,340 +638,6 @@ fun EditorScreen(
                   .shadow(14.dp, RoundedCornerShape(4.dp))
                   .clip(RoundedCornerShape(4.dp))
                   .background(if (pdfBitmap != null) Color.White else pageBgColor)
-                  .pointerInput(
-                    pageIndex,
-                    primaryTool,
-                    isEyedropperActive,
-                    pageData.studyTapes,
-                  ) {
-                    detectTapGestures { tapOffset ->
-                      onDismissPopover()
-                      if (isEyedropperActive) {
-                        onSampleColorAt(tapOffset)
-                        return@detectTapGestures
-                      }
-                      val hitTape =
-                        pageData.studyTapes.find { tape ->
-                          distanceFromPointToSegment(tapOffset, tape.start, tape.end) < tape.thickness
-                        }
-                      if (hitTape != null) {
-                        onToggleStudyTapeReveal(hitTape.id)
-                        return@detectTapGestures
-                      }
-                      if (primaryTool == PrimaryTool.TEXT) {
-                        onAddTextBoxAt(tapOffset, "New Note Text")
-                      } else if (primaryTool == PrimaryTool.STICKY_NOTE) {
-                        onAddStickyNoteAt(tapOffset)
-                      }
-                    }
-                  }
-                  .pointerInput(
-                    pageIndex,
-                    primaryTool,
-                    activeWritingSubTool,
-                    penStyle,
-                    strokePattern,
-                    selectedColor,
-                    selectedThicknessIndex,
-                    holdToErase,
-                    drawAndHold,
-                    circleToLasso,
-                    onlyDrawWithStylus,
-                    isReadOnlyMode,
-                    pageScrollDirection,
-                    rulerState,
-                    isEyedropperActive,
-                    isSPenBarrelButtonActive,
-                  ) {
-                    if (isEyedropperActive) return@pointerInput
-                    awaitEachGesture {
-                      val down = awaitFirstDown(requireUnconsumed = false)
-                      val downTime = System.currentTimeMillis()
-                      val pointerType = down.type
-                      val isStylusOrEraser =
-                        pointerType == PointerType.Stylus || pointerType == PointerType.Eraser
-                      val isHardwareEraser = pointerType == PointerType.Eraser
-                      val isTouchFinger = pointerType == PointerType.Touch
-                      val startPos = down.position
-
-                      // Helper to clamp canvasPanOffset so zoomed page never flies off-screen
-                      fun clampPan(pan: Offset, scale: Float): Offset {
-                        if (scale <= 1.02f) return Offset.Zero
-                        val maxX = (size.width * (scale - 1f) * 0.65f).coerceAtLeast(40f)
-                        val maxY = (size.height * (scale - 1f) * 0.65f).coerceAtLeast(40f)
-                        return Offset(
-                          x = pan.x.coerceIn(-maxX, maxX),
-                          y = pan.y.coerceIn(-maxY, maxY),
-                        )
-                      }
-
-                      // 1) Read-Only Mode OR Stylus-Only Mode when touched by a Finger:
-                      // Single-finger swipes turn pages (Horizontal or Vertical) when unzoomed,
-                      // or pan/pinch-zoom the page when zoomed! Stylus always draws immediately!
-                      if ((onlyDrawWithStylus && isTouchFinger && !isStylusOrEraser) || isReadOnlyMode) {
-                        var prevCentroid = startPos
-                        var prevSpread = 0f
-                        var totalFingerDelta = Offset.Zero
-                        var hadMultiTouch = false
-                        while (true) {
-                          val event = awaitPointerEvent()
-                          val pressed = event.changes.filter { it.pressed }
-                          if (pressed.isEmpty()) break
-                          if (pressed.size >= 2) {
-                            hadMultiTouch = true
-                            val p1 = pressed[0].position
-                            val p2 = pressed[1].position
-                            val centroid = Offset((p1.x + p2.x) / 2f, (p1.y + p2.y) / 2f)
-                            val spread = (p1 - p2).getDistance().coerceAtLeast(10f)
-                            if (prevSpread > 0f) {
-                              val zoomChange = spread / prevSpread
-                              canvasScale = (canvasScale * zoomChange).coerceIn(0.85f, 4.0f)
-                            }
-                            canvasPanOffset = clampPan(canvasPanOffset + (centroid - prevCentroid), canvasScale)
-                            prevCentroid = centroid
-                            prevSpread = spread
-                          } else {
-                            val pos = pressed[0].position
-                            val step = pos - prevCentroid
-                            totalFingerDelta += step
-                            if (canvasScale > 1.04f) {
-                              canvasPanOffset = clampPan(canvasPanOffset + step, canvasScale)
-                            }
-                            prevCentroid = pos
-                            prevSpread = 0f
-                          }
-                          pressed.forEach { it.consume() }
-                        }
-
-                        // If single-finger swipe at normal zoom -> turn PDF/Notebook page Horizontally or Vertically!
-                        if (!hadMultiTouch && canvasScale <= 1.04f) {
-                          if (pageScrollDirection == PageScrollDirection.HORIZONTAL) {
-                            if (totalFingerDelta.x < -70f) navigateByPageSwipe(+1)
-                            else if (totalFingerDelta.x > 70f) navigateByPageSwipe(-1)
-                          } else {
-                            if (totalFingerDelta.y < -70f) navigateByPageSwipe(+1)
-                            else if (totalFingerDelta.y > 70f) navigateByPageSwipe(-1)
-                          }
-                        }
-                        return@awaitEachGesture
-                      }
-
-                      // 2) Functional Interactive Lasso Mode:
-                      val shape = lassoShapeState.value
-                      if (
-                        primaryTool == PrimaryTool.LASSO &&
-                          shape != null &&
-                          (shape.contains(startPos) || shape.distanceToEdge(startPos) < 28f)
-                      ) {
-                        var last = startPos
-                        while (true) {
-                          val event = awaitPointerEvent()
-                          val pressed = event.changes.filter { it.pressed }
-                          if (pressed.isEmpty()) break
-                          val curr = pressed.first().position
-                          val delta = curr - last
-                          if (delta.getDistance() > 0.5f) {
-                            onMoveLassoSelection(delta)
-                            last = curr
-                          }
-                          pressed.forEach { it.consume() }
-                        }
-                        onCommitLassoChanges()
-                        return@awaitEachGesture
-                      }
-
-                      // 3) Standard Stylus / S Pen Side Button / 2-Step Circle-to-Lasso / Drawing / Eraser / Laser Flow
-                      currentDragPoints.clear()
-                      currentDragPressures.clear()
-                      currentDragPoints.add(startPos)
-                      currentDragPressures.add(down.pressure.coerceIn(0.15f, 1.5f))
-
-                      var movedBeyondSlop = false
-                      var holdEraseTriggered =
-                        isHardwareEraser ||
-                          isSPenBarrelButtonActive ||
-                          primaryTool == PrimaryTool.ERASER
-                      var lastMoveTime = downTime
-                      var lastPos = startPos
-                      var multiTouchZoomTriggered = false
-                      var prevPinchSpread = 0f
-                      var prevPinchCentroid = startPos
-                      var twoFingerSwipeDelta = Offset.Zero
-
-                      instantLassoConsumedDuringHold = false
-                      instantShapeSnappedDuringHold = false
-
-                      if (holdEraseTriggered) {
-                        isHoldToEraseActiveNow = true
-                        holdEraserCursor = startPos
-                        onEraseAtPoints(
-                          listOf(startPos),
-                          !isHardwareEraser && !isSPenBarrelButtonActive && primaryTool != PrimaryTool.ERASER,
-                        )
-                      } else if (primaryTool == PrimaryTool.LASER) {
-                        isLaserPointerHeldDown = true
-                        activeLaserPoints.clear()
-                        activeLaserPoints.add(startPos)
-                      } else {
-                        isStylusDrawingDown = true
-                        lastPointerMoveEpochMs = downTime
-                      }
-
-                      while (true) {
-                        val event = awaitPointerEvent()
-                        val pressedChanges = event.changes.filter { it.pressed }
-                        if (pressedChanges.isEmpty()) {
-                          event.changes.forEach { it.consume() }
-                          break
-                        }
-
-                        // Detect Samsung S Pen / Active Stylus side barrel button press mid-stroke or on down!
-                        val sPenSideButtonPressedNow =
-                          isSPenBarrelButtonActive ||
-                            (isStylusOrEraser &&
-                              (event.buttons.isPrimaryPressed || event.buttons.isSecondaryPressed))
-                        if (sPenSideButtonPressedNow && !holdEraseTriggered) {
-                          holdEraseTriggered = true
-                          isStylusDrawingDown = false
-                          currentDragPoints.clear()
-                          currentDragPressures.clear()
-                        }
-
-                        // 2-Finger Gesture: Pinch-to-Zoom OR 2-Finger Horizontal/Vertical Page Swipe!
-                        if (pressedChanges.size >= 2) {
-                          multiTouchZoomTriggered = true
-                          isStylusDrawingDown = false
-                          currentDragPoints.clear()
-                          currentDragPressures.clear()
-                          val p1 = pressedChanges[0].position
-                          val p2 = pressedChanges[1].position
-                          val centroid = Offset((p1.x + p2.x) / 2f, (p1.y + p2.y) / 2f)
-                          val spread = (p1 - p2).getDistance().coerceAtLeast(10f)
-                          if (prevPinchSpread > 0f) {
-                            val zoomFactor = spread / prevPinchSpread
-                            val centroidStep = centroid - prevPinchCentroid
-                            twoFingerSwipeDelta += centroidStep
-                            if (kotlin.math.abs(zoomFactor - 1f) > 0.012f || canvasScale > 1.04f) {
-                              canvasScale = (canvasScale * zoomFactor).coerceIn(0.85f, 4.0f)
-                              canvasPanOffset = clampPan(canvasPanOffset + centroidStep, canvasScale)
-                            }
-                          }
-                          prevPinchSpread = spread
-                          prevPinchCentroid = centroid
-                          pressedChanges.forEach { it.consume() }
-                          continue
-                        }
-
-                        if (multiTouchZoomTriggered) {
-                          pressedChanges.forEach { it.consume() }
-                          continue
-                        }
-
-                        val change = pressedChanges.first()
-                        val pos = change.position
-                        val now = System.currentTimeMillis()
-                        val distFromStart = (pos - startPos).getDistance()
-                        val stepDist = (pos - lastPos).getDistance()
-
-                        if (distFromStart > 14f) {
-                          movedBeyondSlop = true
-                        }
-
-                        // Hold in Place to Erase (if not holding on a drawn circle stroke)
-                        if (
-                          !movedBeyondSlop &&
-                            !holdEraseTriggered &&
-                            holdToErase &&
-                            primaryTool == PrimaryTool.WRITING_TOOLS &&
-                            (now - downTime) >= 420L
-                        ) {
-                          holdEraseTriggered = true
-                          isStylusDrawingDown = false
-                          isHoldToEraseActiveNow = true
-                          holdEraserCursor = pos
-                        }
-
-                        if (stepDist > 3.2f) {
-                          lastMoveTime = now
-                          lastPointerMoveEpochMs = now
-                          lastPos = pos
-                        }
-
-                        if (holdEraseTriggered) {
-                          isHoldToEraseActiveNow = true
-                          holdEraserCursor = pos
-                          onEraseAtPoints(
-                            listOf(pos),
-                            !isHardwareEraser && !sPenSideButtonPressedNow && primaryTool != PrimaryTool.ERASER,
-                          )
-                        } else if (primaryTool == PrimaryTool.LASER) {
-                          isLaserPointerHeldDown = true
-                          activeLaserPoints.add(pos)
-                        } else {
-                          val adjustedPos =
-                            if (rulerState.isVisible && (pos - rulerState.centerOffset).getDistance() < 160f) {
-                              snapPointAlongRuler(startPos, pos, rulerState.angleDegrees)
-                            } else {
-                              pos
-                            }
-                          currentDragPoints.add(adjustedPos)
-                          currentDragPressures.add(change.pressure.coerceIn(0.15f, 1.5f))
-                        }
-                        change.consume()
-                      }
-
-                      // If user performed a 2-finger swipe at 100% zoom, turn page Horizontally or Vertically!
-                      if (multiTouchZoomTriggered && canvasScale <= 1.04f) {
-                        if (pageScrollDirection == PageScrollDirection.HORIZONTAL) {
-                          if (twoFingerSwipeDelta.x < -70f) navigateByPageSwipe(+1)
-                          else if (twoFingerSwipeDelta.x > 70f) navigateByPageSwipe(-1)
-                        } else {
-                          if (twoFingerSwipeDelta.y < -70f) navigateByPageSwipe(+1)
-                          else if (twoFingerSwipeDelta.y > 70f) navigateByPageSwipe(-1)
-                        }
-                      }
-
-                      isStylusDrawingDown = false
-                      val upTime = System.currentTimeMillis()
-                      val heldStillAtEnd =
-                        instantShapeSnappedDuringHold ||
-                          (drawAndHold &&
-                            movedBeyondSlop &&
-                            (upTime - lastMoveTime) >= 340L &&
-                            currentDragPoints.size >= 6)
-
-                      if (primaryTool == PrimaryTool.LASER) {
-                        if (activeLaserPoints.isNotEmpty()) {
-                          laserCommittedTrails.add(activeLaserPoints.toList())
-                          activeLaserPoints.clear()
-                        }
-                        isLaserPointerHeldDown = false
-                        laserReleaseCounter += 1L
-                      } else if (holdEraseTriggered) {
-                        isHoldToEraseActiveNow = false
-                        holdEraserCursor = null
-                      } else if (
-                        primaryTool == PrimaryTool.LASSO &&
-                          lassoShapeState.value != null &&
-                          !movedBeyondSlop &&
-                          !multiTouchZoomTriggered
-                      ) {
-                        onClearLassoSelection()
-                      } else if (
-                        !multiTouchZoomTriggered &&
-                          !instantLassoConsumedDuringHold &&
-                          currentDragPoints.size >= 2
-                      ) {
-                        onAddStroke(
-                          currentDragPoints.toList(),
-                          currentDragPressures.toList(),
-                          heldStillAtEnd,
-                        )
-                      }
-                      currentDragPoints.clear()
-                      currentDragPressures.clear()
-                    }
-                  }
                   .testTag(if (isCurrentActivePage) "note_canvas_page" else "note_canvas_page_$pageIndex"),
             ) {
               if (pdfBitmap != null) {
@@ -981,6 +652,7 @@ fun EditorScreen(
               val lassoActive = primaryTool == PrimaryTool.LASSO && showLassoSelection
 
               pageData.images.forEach { imageItem ->
+                val isImgSelected = lassoActive
                 Image(
                   bitmap = imageItem.bitmap.asImageBitmap(),
                   contentDescription = "Inserted photo",
@@ -993,7 +665,11 @@ fun EditorScreen(
                       .size(width = imageItem.widthDp.dp, height = imageItem.heightDp.dp)
                       .graphicsLayer { rotationZ = imageItem.rotationDegrees }
                       .clip(RoundedCornerShape(8.dp))
-                      .border(1.dp, SwitchBlue.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
+                      .border(
+                        width = if (isImgSelected) 2.dp else 1.dp,
+                        color = if (isImgSelected) SwitchBlue else SwitchBlue.copy(alpha = 0.6f),
+                        shape = RoundedCornerShape(8.dp),
+                      )
                       .then(
                         if (lassoActive) Modifier
                         else
@@ -1012,7 +688,377 @@ fun EditorScreen(
                 pageData.strokes.sortedBy { it.zIndex }
               }
 
-              Canvas(modifier = Modifier.fillMaxSize()) {
+              Canvas(
+                modifier =
+                  Modifier
+                    .fillMaxSize()
+                    .pointerInput(
+                      pageIndex,
+                      primaryTool,
+                      isEyedropperActive,
+                      pageData.studyTapes,
+                    ) {
+                      detectTapGestures { tapOffset ->
+                        onDismissPopover()
+                        if (isEyedropperActive) {
+                          onSampleColorAt(tapOffset)
+                          return@detectTapGestures
+                        }
+                        val hitTape =
+                          pageData.studyTapes.find { tape ->
+                            distanceFromPointToSegment(tapOffset, tape.start, tape.end) < tape.thickness
+                          }
+                        if (hitTape != null) {
+                          onToggleStudyTapeReveal(hitTape.id)
+                          return@detectTapGestures
+                        }
+                        if (primaryTool == PrimaryTool.TEXT) {
+                          onAddTextBoxAt(tapOffset, "New Note Text")
+                        } else if (primaryTool == PrimaryTool.STICKY_NOTE) {
+                          onAddStickyNoteAt(tapOffset)
+                        }
+                      }
+                    }
+                    .pointerInput(
+                      pageIndex,
+                      primaryTool,
+                      activeWritingSubTool,
+                      penStyle,
+                      strokePattern,
+                      selectedColor,
+                      selectedThicknessIndex,
+                      holdToErase,
+                      drawAndHold,
+                      circleToLasso,
+                      onlyDrawWithStylus,
+                      isReadOnlyMode,
+                      pageScrollDirection,
+                      rulerState,
+                      isEyedropperActive,
+                      isSPenBarrelButtonActive,
+                    ) {
+                      if (isEyedropperActive) return@pointerInput
+                      awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false)
+                        val downTime = System.currentTimeMillis()
+                        val pointerType = down.type
+                        val isStylusOrEraser =
+                          pointerType == PointerType.Stylus || pointerType == PointerType.Eraser
+                        val isHardwareEraser = pointerType == PointerType.Eraser
+                        val isTouchFinger = pointerType == PointerType.Touch
+                        val startPos = down.position
+
+                        // Convert page-local coordinates to stable viewport coordinates so
+                        // updating canvasScale / canvasPanOffset never causes coordinate oscillation!
+                        fun toViewportPos(local: Offset): Offset {
+                          val cx = size.width / 2f
+                          val cy = size.height / 2f
+                          return Offset(
+                            x = cx + (local.x - cx) * canvasScale + canvasPanOffset.x,
+                            y = cy + (local.y - cy) * canvasScale + canvasPanOffset.y,
+                          )
+                        }
+
+                        // Helper to clamp canvasPanOffset so zoomed PDF/page never flies off-screen
+                        fun clampPan(pan: Offset, scale: Float): Offset {
+                          if (scale <= 1.02f) return Offset.Zero
+                          val maxX = (size.width * (scale - 1f) * 0.72f).coerceAtLeast(48f)
+                          val maxY = (size.height * (scale - 1f) * 0.72f).coerceAtLeast(48f)
+                          return Offset(
+                            x = pan.x.coerceIn(-maxX, maxX),
+                            y = pan.y.coerceIn(-maxY, maxY),
+                          )
+                        }
+
+                        // 1) Read-Only Mode OR Stylus-Only Mode when touched by a Finger:
+                        // Single-finger swipes turn pages (Horizontal or Vertical) when unzoomed,
+                        // or pan/pinch-zoom the PDF/page smoothly when zoomed! Stylus always draws immediately!
+                        if ((onlyDrawWithStylus && isTouchFinger && !isStylusOrEraser) || isReadOnlyMode) {
+                          var prevViewportCentroid = toViewportPos(startPos)
+                          var prevSpread = 0f
+                          var totalFingerDelta = Offset.Zero
+                          var hadMultiTouch = false
+                          while (true) {
+                            val event = awaitPointerEvent()
+                            val pressed = event.changes.filter { it.pressed }
+                            if (pressed.isEmpty()) break
+                            if (pressed.size >= 2) {
+                              hadMultiTouch = true
+                              val p1 = toViewportPos(pressed[0].position)
+                              val p2 = toViewportPos(pressed[1].position)
+                              val centroid = Offset((p1.x + p2.x) / 2f, (p1.y + p2.y) / 2f)
+                              val spread = (p1 - p2).getDistance().coerceAtLeast(12f)
+                              if (prevSpread > 0f) {
+                                val zoomFactor = spread / prevSpread
+                                val newScale = (canvasScale * zoomFactor).coerceIn(0.65f, 4.5f)
+                                val effectiveZoom = newScale / canvasScale
+                                val cx = size.width / 2f
+                                val cy = size.height / 2f
+                                val focalShift = Offset(
+                                  x = (centroid.x - cx - canvasPanOffset.x) * (1f - effectiveZoom),
+                                  y = (centroid.y - cy - canvasPanOffset.y) * (1f - effectiveZoom),
+                                )
+                                canvasScale = newScale
+                                canvasPanOffset =
+                                  clampPan(
+                                    canvasPanOffset + (centroid - prevViewportCentroid) + focalShift,
+                                    newScale,
+                                  )
+                              }
+                              prevViewportCentroid = centroid
+                              prevSpread = spread
+                            } else {
+                              val vpPos = toViewportPos(pressed[0].position)
+                              val step = vpPos - prevViewportCentroid
+                              totalFingerDelta += step
+                              if (canvasScale > 1.04f) {
+                                canvasPanOffset = clampPan(canvasPanOffset + step, canvasScale)
+                              }
+                              prevViewportCentroid = vpPos
+                              prevSpread = 0f
+                            }
+                            pressed.forEach { it.consume() }
+                          }
+
+                          // If single-finger swipe at normal zoom -> turn PDF/Notebook page Horizontally or Vertically!
+                          if (!hadMultiTouch && canvasScale <= 1.04f) {
+                            if (pageScrollDirection == PageScrollDirection.HORIZONTAL) {
+                              if (totalFingerDelta.x < -70f) navigateByPageSwipe(+1)
+                              else if (totalFingerDelta.x > 70f) navigateByPageSwipe(-1)
+                            } else {
+                              if (totalFingerDelta.y < -70f) navigateByPageSwipe(+1)
+                              else if (totalFingerDelta.y > 70f) navigateByPageSwipe(-1)
+                            }
+                          }
+                          return@awaitEachGesture
+                        }
+
+                        // 2) Functional Interactive Lasso Mode:
+                        val shape = lassoShapeState.value
+                        if (
+                          primaryTool == PrimaryTool.LASSO &&
+                            shape != null &&
+                            (shape.contains(startPos) || shape.distanceToEdge(startPos) < 28f)
+                        ) {
+                          var last = startPos
+                          while (true) {
+                            val event = awaitPointerEvent()
+                            val pressed = event.changes.filter { it.pressed }
+                            if (pressed.isEmpty()) break
+                            val curr = pressed.first().position
+                            val delta = curr - last
+                            if (delta.getDistance() > 0.5f) {
+                              onMoveLassoSelection(delta)
+                              last = curr
+                            }
+                            pressed.forEach { it.consume() }
+                          }
+                          onCommitLassoChanges()
+                          return@awaitEachGesture
+                        }
+
+                        // 3) Standard Stylus / S Pen Side Button / 2-Step Circle-to-Lasso / Drawing / Eraser / Laser Flow
+                        currentDragPoints.clear()
+                        currentDragPressures.clear()
+                        currentDragPoints.add(startPos)
+                        currentDragPressures.add(down.pressure.coerceIn(0.15f, 1.5f))
+
+                        var movedBeyondSlop = false
+                        var holdEraseTriggered =
+                          isHardwareEraser ||
+                            isSPenBarrelButtonActive ||
+                            primaryTool == PrimaryTool.ERASER
+                        var lastMoveTime = downTime
+                        var lastPos = startPos
+                        var multiTouchZoomTriggered = false
+                        var prevPinchSpread = 0f
+                        var prevPinchViewportCentroid = toViewportPos(startPos)
+                        var twoFingerSwipeDelta = Offset.Zero
+
+                        instantLassoConsumedDuringHold = false
+                        instantShapeSnappedDuringHold = false
+
+                        if (holdEraseTriggered) {
+                          isHoldToEraseActiveNow = true
+                          holdEraserCursor = startPos
+                          onEraseAtPoints(
+                            listOf(startPos),
+                            !isHardwareEraser && !isSPenBarrelButtonActive && primaryTool != PrimaryTool.ERASER,
+                          )
+                        } else if (primaryTool == PrimaryTool.LASER) {
+                          isLaserPointerHeldDown = true
+                          activeLaserPoints.clear()
+                          activeLaserPoints.add(startPos)
+                        } else {
+                          isStylusDrawingDown = true
+                          lastPointerMoveEpochMs = downTime
+                        }
+
+                        while (true) {
+                          val event = awaitPointerEvent()
+                          val pressedChanges = event.changes.filter { it.pressed }
+                          if (pressedChanges.isEmpty()) {
+                            event.changes.forEach { it.consume() }
+                            break
+                          }
+
+                          // Detect Samsung S Pen / Active Stylus side barrel button press mid-stroke or on down!
+                          val sPenSideButtonPressedNow =
+                            isSPenBarrelButtonActive ||
+                              (isStylusOrEraser &&
+                                (event.buttons.isPrimaryPressed || event.buttons.isSecondaryPressed))
+                          if (sPenSideButtonPressedNow && !holdEraseTriggered) {
+                            holdEraseTriggered = true
+                            isStylusDrawingDown = false
+                            currentDragPoints.clear()
+                            currentDragPressures.clear()
+                          }
+
+                          // 2-Finger Gesture: Pinch-to-Zoom OR 2-Finger Horizontal/Vertical Page Swipe!
+                          if (pressedChanges.size >= 2) {
+                            multiTouchZoomTriggered = true
+                            isStylusDrawingDown = false
+                            currentDragPoints.clear()
+                            currentDragPressures.clear()
+                            val p1 = toViewportPos(pressedChanges[0].position)
+                            val p2 = toViewportPos(pressedChanges[1].position)
+                            val centroid = Offset((p1.x + p2.x) / 2f, (p1.y + p2.y) / 2f)
+                            val spread = (p1 - p2).getDistance().coerceAtLeast(12f)
+                            if (prevPinchSpread > 0f) {
+                              val zoomFactor = spread / prevPinchSpread
+                              val centroidStep = centroid - prevPinchViewportCentroid
+                              twoFingerSwipeDelta += centroidStep
+                              if (kotlin.math.abs(zoomFactor - 1f) > 0.008f || canvasScale > 1.04f) {
+                                val newScale = (canvasScale * zoomFactor).coerceIn(0.65f, 4.5f)
+                                val effectiveZoom = newScale / canvasScale
+                                val cx = size.width / 2f
+                                val cy = size.height / 2f
+                                val focalShift = Offset(
+                                  x = (centroid.x - cx - canvasPanOffset.x) * (1f - effectiveZoom),
+                                  y = (centroid.y - cy - canvasPanOffset.y) * (1f - effectiveZoom),
+                                )
+                                canvasScale = newScale
+                                canvasPanOffset =
+                                  clampPan(canvasPanOffset + centroidStep + focalShift, newScale)
+                              }
+                            }
+                            prevPinchSpread = spread
+                            prevPinchViewportCentroid = centroid
+                            pressedChanges.forEach { it.consume() }
+                            continue
+                          }
+
+                          if (multiTouchZoomTriggered) {
+                            pressedChanges.forEach { it.consume() }
+                            continue
+                          }
+
+                          val change = pressedChanges.first()
+                          val pos = change.position
+                          val now = System.currentTimeMillis()
+                          val distFromStart = (pos - startPos).getDistance()
+                          val stepDist = (pos - lastPos).getDistance()
+
+                          if (distFromStart > 14f) {
+                            movedBeyondSlop = true
+                          }
+
+                          // Hold in Place to Erase (if not holding on a drawn circle stroke)
+                          if (
+                            !movedBeyondSlop &&
+                              !holdEraseTriggered &&
+                              holdToErase &&
+                              primaryTool == PrimaryTool.WRITING_TOOLS &&
+                              (now - downTime) >= 420L
+                          ) {
+                            holdEraseTriggered = true
+                            isStylusDrawingDown = false
+                            isHoldToEraseActiveNow = true
+                            holdEraserCursor = pos
+                          }
+
+                          if (stepDist > 3.2f) {
+                            lastMoveTime = now
+                            lastPointerMoveEpochMs = now
+                            lastPos = pos
+                          }
+
+                          if (holdEraseTriggered) {
+                            isHoldToEraseActiveNow = true
+                            holdEraserCursor = pos
+                            onEraseAtPoints(
+                              listOf(pos),
+                              !isHardwareEraser && !sPenSideButtonPressedNow && primaryTool != PrimaryTool.ERASER,
+                            )
+                          } else if (primaryTool == PrimaryTool.LASER) {
+                            isLaserPointerHeldDown = true
+                            activeLaserPoints.add(pos)
+                          } else {
+                            val adjustedPos =
+                              if (rulerState.isVisible && (pos - rulerState.centerOffset).getDistance() < 160f) {
+                                snapPointAlongRuler(startPos, pos, rulerState.angleDegrees)
+                              } else {
+                                pos
+                              }
+                            currentDragPoints.add(adjustedPos)
+                            currentDragPressures.add(change.pressure.coerceIn(0.15f, 1.5f))
+                          }
+                          change.consume()
+                        }
+
+                        // If user performed a 2-finger swipe at 100% zoom, turn page Horizontally or Vertically!
+                        if (multiTouchZoomTriggered && canvasScale <= 1.04f) {
+                          if (pageScrollDirection == PageScrollDirection.HORIZONTAL) {
+                            if (twoFingerSwipeDelta.x < -70f) navigateByPageSwipe(+1)
+                            else if (twoFingerSwipeDelta.x > 70f) navigateByPageSwipe(-1)
+                          } else {
+                            if (twoFingerSwipeDelta.y < -70f) navigateByPageSwipe(+1)
+                            else if (twoFingerSwipeDelta.y > 70f) navigateByPageSwipe(-1)
+                          }
+                        }
+
+                        isStylusDrawingDown = false
+                        val upTime = System.currentTimeMillis()
+                        val heldStillAtEnd =
+                          instantShapeSnappedDuringHold ||
+                            (drawAndHold &&
+                              movedBeyondSlop &&
+                              (upTime - lastMoveTime) >= 340L &&
+                              currentDragPoints.size >= 6)
+
+                        if (primaryTool == PrimaryTool.LASER) {
+                          if (activeLaserPoints.isNotEmpty()) {
+                            laserCommittedTrails.add(activeLaserPoints.toList())
+                            activeLaserPoints.clear()
+                          }
+                          isLaserPointerHeldDown = false
+                          laserReleaseCounter += 1L
+                        } else if (holdEraseTriggered) {
+                          isHoldToEraseActiveNow = false
+                          holdEraserCursor = null
+                        } else if (
+                          primaryTool == PrimaryTool.LASSO &&
+                            lassoShapeState.value != null &&
+                            !movedBeyondSlop &&
+                            !multiTouchZoomTriggered
+                        ) {
+                          onClearLassoSelection()
+                        } else if (
+                          !multiTouchZoomTriggered &&
+                            !instantLassoConsumedDuringHold &&
+                            currentDragPoints.size >= 2
+                        ) {
+                          onAddStroke(
+                            currentDragPoints.toList(),
+                            currentDragPressures.toList(),
+                            heldStillAtEnd,
+                          )
+                        }
+                        currentDragPoints.clear()
+                        currentDragPressures.clear()
+                      }
+                    },
+              ) {
                 val w = size.width
                 val h = size.height
 
@@ -1240,9 +1286,9 @@ fun EditorScreen(
                           pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 10f), 0f),
                         ),
                     )
-                    if (isLassoResizeMode && lassoBounds != null) {
+                    if (lassoBounds != null) {
                       drawRoundRect(
-                        color = SwitchBlue,
+                        color = if (isLassoResizeMode) SwitchBlue else SwitchBlue.copy(alpha = 0.55f),
                         topLeft = Offset(lassoBounds[0] - 8f, lassoBounds[1] - 8f),
                         size =
                           Size(
@@ -1252,8 +1298,10 @@ fun EditorScreen(
                         cornerRadius = CornerRadius(6f, 6f),
                         style =
                           Stroke(
-                            width = 2f,
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f),
+                            width = if (isLassoResizeMode) 2.4f else 1.4f,
+                            pathEffect =
+                              if (isLassoResizeMode) null
+                              else PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f),
                           ),
                       )
                     }
@@ -1264,23 +1312,84 @@ fun EditorScreen(
               val loopState = rememberUpdatedState(lassoLoopPoints)
               val boundsState = rememberUpdatedState(lassoBounds)
 
-              // Interactive Bottom-Right Resize & Rotate Handle for Active Lasso Selection
+              // Interactive Resize & Rotate Handles for Active Lasso Selection (Sits ABOVE Canvas!)
               if (
                 isCurrentActivePage &&
                   primaryTool == PrimaryTool.LASSO &&
                   showLassoSelection &&
                   lassoBounds != null
               ) {
-                val handleX = lassoBounds[2] + 6f
-                val handleY = lassoBounds[3] + 6f
+                // When Resize mode is toggled ON from the pill, show 3 additional corner resize handles (TL, TR, BL)
+                if (isLassoResizeMode) {
+                  val corners =
+                    listOf(
+                      Offset(lassoBounds[0] - 8f, lassoBounds[1] - 8f),
+                      Offset(lassoBounds[2] + 8f, lassoBounds[1] - 8f),
+                      Offset(lassoBounds[0] - 8f, lassoBounds[3] + 8f),
+                    )
+                  corners.forEachIndexed { idx, cornerPos ->
+                    Box(
+                      modifier =
+                        Modifier
+                          .offset {
+                            IntOffset((cornerPos.x - 10f).roundToInt(), (cornerPos.y - 10f).roundToInt())
+                          }
+                          .size(20.dp)
+                          .shadow(4.dp, CircleShape)
+                          .clip(CircleShape)
+                          .background(Color.White)
+                          .border(2.5.dp, SwitchBlue, CircleShape)
+                          .pointerInput(idx) {
+                            var handle = Offset.Zero
+                            var pivot = Offset.Zero
+                            detectDragGestures(
+                              onDragStart = {
+                                val b = boundsState.value
+                                val lp = loopState.value
+                                if (b != null && lp.isNotEmpty()) {
+                                  handle =
+                                    when (idx) {
+                                      0 -> Offset(b[0] - 8f, b[1] - 8f)
+                                      1 -> Offset(b[2] + 8f, b[1] - 8f)
+                                      else -> Offset(b[0] - 8f, b[3] + 8f)
+                                    }
+                                  pivot =
+                                    Offset(
+                                      lp.map { it.x }.average().toFloat(),
+                                      lp.map { it.y }.average().toFloat(),
+                                    )
+                                }
+                              },
+                              onDragEnd = { onCommitLassoChanges() },
+                              onDragCancel = { onCommitLassoChanges() },
+                            ) { change, drag ->
+                              change.consume()
+                              val oldVec = handle - pivot
+                              handle += drag
+                              val newVec = handle - pivot
+                              val scale =
+                                (newVec.getDistance().coerceAtLeast(20f) /
+                                    oldVec.getDistance().coerceAtLeast(20f))
+                                  .coerceIn(0.92f, 1.08f)
+                              onTransformLassoSelection(scale, 0f)
+                            }
+                          }
+                          .testTag("lasso_corner_resize_handle_$idx"),
+                    )
+                  }
+                }
+
+                // Primary Bottom-Right Resize & Rotate Handle (Always active when Lasso selection is shown)
+                val handleX = lassoBounds[2] + 8f
+                val handleY = lassoBounds[3] + 8f
 
                 Box(
                   modifier =
                     Modifier
                       .offset {
-                        IntOffset((handleX - 13f).roundToInt(), (handleY - 13f).roundToInt())
+                        IntOffset((handleX - 15f).roundToInt(), (handleY - 15f).roundToInt())
                       }
-                      .size(26.dp)
+                      .size(30.dp)
                       .shadow(6.dp, CircleShape)
                       .clip(CircleShape)
                       .background(SwitchBlue)
@@ -1293,7 +1402,7 @@ fun EditorScreen(
                             val b = boundsState.value
                             val lp = loopState.value
                             if (b != null && lp.isNotEmpty()) {
-                              handle = Offset(b[2] + 6f, b[3] + 6f)
+                              handle = Offset(b[2] + 8f, b[3] + 8f)
                               pivot = Offset(lp.map { it.x }.average().toFloat(), lp.map { it.y }.average().toFloat())
                             }
                           },
@@ -1321,7 +1430,7 @@ fun EditorScreen(
                     imageVector = Icons.Outlined.OpenInFull,
                     contentDescription = "Drag to Resize and Rotate Selection",
                     tint = Color.White,
-                    modifier = Modifier.size(14.dp),
+                    modifier = Modifier.size(15.dp),
                   )
                 }
               }
@@ -1486,7 +1595,7 @@ fun EditorScreen(
                   onCloseRuler = onToggleRuler,
                 )
 
-                // Floating Dark Lasso Action Pill (Screenshot 5 & Circle-to-Lasso)
+                // Floating Dark Lasso Action Pill (Sits ABOVE Canvas so Cut/Copy/Paste/Resize/Delete never get eaten!)
                 androidx.compose.animation.AnimatedVisibility(
                   visible = primaryTool == PrimaryTool.LASSO && showLassoSelection,
                   enter = fadeIn(),
@@ -1494,8 +1603,8 @@ fun EditorScreen(
                   modifier =
                     if (lassoBounds != null) {
                       val pillTop =
-                        if (lassoBounds[1] > 60f) (lassoBounds[1] - 54f).coerceAtLeast(8f)
-                        else (lassoBounds[3] + 16f)
+                        if (lassoBounds[1] > 64f) (lassoBounds[1] - 56f).coerceAtLeast(8f)
+                        else (lassoBounds[3] + 18f)
                       Modifier.offset { IntOffset(0, pillTop.roundToInt()) }
                     } else {
                       Modifier.padding(top = 110.dp)
@@ -1521,6 +1630,44 @@ fun EditorScreen(
                       onConvertAiTextClick = { onTogglePopover(ActivePopover.AI_HANDWRITING_ASSIST) },
                       onOpenLassoFiltersClick = { onTogglePopover(ActivePopover.LASSO_SETTINGS) },
                       onDismissLassoClick = onToggleLassoSelection,
+                    )
+                  }
+                }
+
+                // Quick Floating "Paste Clipboard" Chip when clipboard has cut/copied items and no active selection loop is open
+                androidx.compose.animation.AnimatedVisibility(
+                  visible = hasClipboardContent && (!showLassoSelection || primaryTool != PrimaryTool.LASSO),
+                  enter = fadeIn(),
+                  exit = fadeOut(),
+                  modifier =
+                    Modifier
+                      .align(Alignment.TopCenter)
+                      .padding(top = 12.dp),
+                ) {
+                  Row(
+                    modifier =
+                      Modifier
+                        .shadow(8.dp, RoundedCornerShape(18.dp))
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Color(0xEE18315A))
+                        .border(1.dp, Color(0xFF4C8DF6), RoundedCornerShape(18.dp))
+                        .clickable { onPasteLassoSelection() }
+                        .padding(horizontal = 14.dp, vertical = 7.dp)
+                        .testTag("floating_paste_clipboard_chip"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                  ) {
+                    Icon(
+                      imageVector = Icons.Outlined.ContentPaste,
+                      contentDescription = "Paste Clipboard Selection",
+                      tint = Color(0xFF67C8EB),
+                      modifier = Modifier.size(15.dp),
+                    )
+                    Text(
+                      text = "Paste Clipboard",
+                      color = Color.White,
+                      fontSize = 11.5.sp,
+                      fontWeight = FontWeight.SemiBold,
                     )
                   }
                 }
@@ -1620,10 +1767,11 @@ fun EditorScreen(
         }
 
         // Render Multi-Page PDF / Notebook inside HorizontalPager or VerticalPager!
+        // Disable pager swipe while zoomed in (canvasScale > 1.05f) so single-finger pan never gets hijacked by page turn!
         if (pageScrollDirection == PageScrollDirection.HORIZONTAL) {
           HorizontalPager(
             state = pagerState,
-            userScrollEnabled = onlyDrawWithStylus || isReadOnlyMode,
+            userScrollEnabled = (onlyDrawWithStylus || isReadOnlyMode) && canvasScale <= 1.05f,
             modifier = Modifier.fillMaxSize().testTag("horizontal_page_pager"),
           ) { pageIdx ->
             renderSingleNotePage(pageIdx)
@@ -1631,7 +1779,7 @@ fun EditorScreen(
         } else {
           VerticalPager(
             state = pagerState,
-            userScrollEnabled = onlyDrawWithStylus || isReadOnlyMode,
+            userScrollEnabled = (onlyDrawWithStylus || isReadOnlyMode) && canvasScale <= 1.05f,
             modifier = Modifier.fillMaxSize().testTag("vertical_page_pager"),
           ) { pageIdx ->
             renderSingleNotePage(pageIdx)
@@ -1760,21 +1908,30 @@ fun EditorScreen(
               Modifier
                 .size(16.dp)
                 .clickable {
-                  canvasScale = (canvasScale - 0.2f).coerceIn(0.85f, 4.0f)
+                  canvasScale = (canvasScale - 0.25f).coerceIn(0.65f, 4.5f)
                   if (canvasScale <= 1.04f) canvasPanOffset = Offset.Zero
                 },
           )
           Text(
             text = "${(canvasScale * 100).roundToInt()}%",
-            color = TextPrimaryWhite,
+            color = if (canvasScale > 1.04f) SubToolbarActiveCyan else TextPrimaryWhite,
             fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
+            fontWeight = FontWeight.SemiBold,
             modifier =
               Modifier
+                .clip(RoundedCornerShape(4.dp))
                 .clickable {
-                  canvasScale = 1f
-                  canvasPanOffset = Offset.Zero
+                  // Cycle 100% -> 150% -> 200% -> 100% or reset to 100%
+                  if (kotlin.math.abs(canvasScale - 1f) < 0.06f) {
+                    canvasScale = 1.5f
+                  } else if (kotlin.math.abs(canvasScale - 1.5f) < 0.08f) {
+                    canvasScale = 2.0f
+                  } else {
+                    canvasScale = 1f
+                    canvasPanOffset = Offset.Zero
+                  }
                 }
+                .padding(horizontal = 4.dp, vertical = 2.dp)
                 .testTag("zoom_reset_percentage"),
           )
           Icon(
@@ -1784,7 +1941,7 @@ fun EditorScreen(
             modifier =
               Modifier
                 .size(16.dp)
-                .clickable { canvasScale = (canvasScale + 0.2f).coerceIn(0.85f, 4.0f) },
+                .clickable { canvasScale = (canvasScale + 0.25f).coerceIn(0.65f, 4.5f) },
           )
         }
 
