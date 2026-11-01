@@ -3,13 +3,13 @@ package com.example.model
 import android.graphics.Bitmap
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import kotlin.math.hypot
 import com.example.ui.theme.PenColorGridPalette
 import com.example.ui.theme.SwatchMagenta
 import com.example.ui.theme.SwatchNeonGreen
 import com.example.ui.theme.SwatchPurple
 import com.example.ui.theme.SwatchRoyalBlue
 import com.example.ui.theme.SwatchWhite
+import kotlin.math.hypot
 
 enum class ScreenMode {
   DOCUMENTS,
@@ -17,43 +17,85 @@ enum class ScreenMode {
   SETTINGS,
 }
 
+typealias AppScreen = ScreenMode
+
+enum class AppThemeMode(val label: String) {
+  DARK("Dark"),
+  LIGHT("Light"),
+  SYSTEM("System"),
+}
+
+enum class DocumentType(val label: String) {
+  NOTEBOOK("Notebook"),
+  WHITEBOARD("Whiteboard"),
+}
+
+enum class PageSizePreset(
+  val label: String,
+  val subtitle: String,
+  val widthPt: Int,
+  val heightPt: Int,
+) {
+  GOODNOTES_STANDARD("Goodnotes Standard", "Optimized for tablet screens", 595, 780),
+  A4("A4 Paper", "210 × 297 mm ISO standard", 595, 842),
+  LETTER("US Letter", "8.5 × 11 in standard", 612, 792);
+
+  val aspectRatioPortrait: Float
+    get() = widthPt.toFloat() / heightPt.toFloat()
+}
+
+enum class PageOrientation(val label: String) {
+  PORTRAIT("Portrait"),
+  LANDSCAPE("Landscape"),
+}
+
+enum class LibraryViewMode(val label: String) {
+  GRID("Grid"),
+  LIST("List"),
+}
+
+enum class DocumentSortOption(val label: String) {
+  RECENT("Date Modified"),
+  NAME_ASC("Name (A–Z)"),
+  FAVORITES_FIRST("Favorites First"),
+}
+
 enum class SidebarSection(val label: String) {
   DOCUMENTS("Documents"),
   FAVORITES("Favorites"),
-  SHARED("Shared"),
-  MARKETPLACE("Marketplace"),
+  SHARED("Templates"),
+  MARKETPLACE("Whiteboards"),
   TRASH("Trash"),
 }
 
+typealias DocumentsSidebarSection = SidebarSection
+
 /**
- * Official Goodnotes 6 Main Toolbar Tools (from IMG_0531 "Toolbar Customization" + IMG_0526).
+ * Main Docked Toolbar Tools.
  */
 enum class PrimaryTool(val label: String) {
-  LASSO("Lasso"),
-  WRITING_TOOLS("Writing Tools"),
+  WRITING_TOOLS("Pen & Ink"),
   ERASER("Eraser"),
-  TEXT("Text"),
-  ELEMENTS("Elements"),
-  IMAGE("Images"),
+  LASSO("Lasso"),
   SHAPE("Shapes"),
-  STICKY_NOTE("Sticky Notes"),
-  LASER("Laser Pointer"),
+  TEXT("Text"),
+  IMAGE("Images"),
+  ELEMENTS("Elements"),
+  STICKY_NOTE("Note"),
+  LASER("Laser"),
 }
 
 /**
- * Official Goodnotes 6 Writing Sub-Tools (from IMG_0531 "Writing Tools Customization" & Floating Sub-Toolbar).
+ * Writing Sub-Tools in the Contextual Toolbar Strip.
  */
 enum class WritingSubTool(val label: String) {
   PEN("Pen"),
   PENCIL("Pencil"),
   HIGHLIGHTER("Highlighter"),
-  TAPE("Tape"),
-  DRAW_SHAPE("Draw Shape"),
+  TAPE("Study Tape"),
+  DRAW_SHAPE("Shapes"),
 }
 
-/**
- * Full 4-edge Toolbar Docking (Top, Bottom, Left Rail, Right Rail) + Long-Press to Reposition.
- */
 enum class ToolbarDockPosition(val label: String) {
   TOP("Top"),
   BOTTOM("Bottom"),
@@ -62,7 +104,7 @@ enum class ToolbarDockPosition(val label: String) {
 }
 
 /**
- * Goodnotes 6 Page Scrolling Direction (Horizontal book turn vs Vertical continuous scroll).
+ * Page Scrolling Direction (Horizontal book turn vs Vertical continuous scroll).
  */
 enum class PageScrollDirection(val label: String) {
   HORIZONTAL("Horizontal"),
@@ -84,11 +126,11 @@ enum class StrokePattern(val label: String) {
 enum class EraserMode(val label: String) {
   PRECISION("Precision Eraser"),
   STROKE("Stroke Eraser"),
-  HIGHLIGHTER_ONLY("Erase Highlighter Only"),
+  HIGHLIGHTER_ONLY("Highlighter Only"),
 }
 
 /**
- * Expanded 11-Shape Goodnotes 6 Auto-Detected Geometric Shapes Suite.
+ * 11 Auto-Detected Geometric Shapes Suite.
  */
 enum class ShapeKind(val label: String) {
   LINE("Line"),
@@ -121,36 +163,51 @@ enum class ActivePopover {
   TIME_KEEPER,
   TOOLBAR_CUSTOMIZE,
   NEW_NOTE_DIALOG,
+  ADD_PAGE_DIALOG,
   AI_HANDWRITING_ASSIST,
   EXPORT_SHARE,
   SECURITY_VAULT,
 }
 
 enum class NotebookCoverStyle(val label: String) {
-  KRAFT_TAN("Kraft Tan"),
-  CHARCOAL_DARK("Charcoal Pro"),
-  WHITE_DOCUMENT("Clean White"),
-  WHITEBOARD("Infinite Whiteboard"),
-  HANDWRITTEN_NOTES("Study Notes"),
-  GRID_PAPER("Engineering Grid"),
+  KRAFT_TAN("Kraft Classic"),
+  CHARCOAL_DARK("Charcoal Slate"),
+  WHITE_DOCUMENT("Clean Ivory"),
+  WHITEBOARD("Infinite Canvas"),
+  HANDWRITTEN_NOTES("Academic Blue"),
+  GRID_PAPER("Technical Grid"),
 }
 
-enum class PaperTemplate(val label: String) {
-  BLANK("Blank Paper"),
-  RULED("Ruled Lines"),
-  GRID("Square Grid"),
-  DOTTED("Dotted Grid"),
-  CORNELL("Cornell Notes"),
+enum class PaperTemplate(val label: String, val category: String = "Essentials") {
+  BLANK("Blank", "Essentials"),
+  RULED("Ruled Narrow", "Writing"),
+  COLLEGE_RULED("College Ruled", "Writing"),
+  WIDE_RULED("Wide Ruled", "Writing"),
+  DOTTED("Dotted Grid", "Grid & Dots"),
+  GRID("Square Grid", "Grid & Dots"),
+  GRAPH("Engineering Graph", "Grid & Dots"),
+  CORNELL("Cornell Notes", "Study & Plan"),
+  PLANNER("Daily Planner", "Study & Plan"),
+  MUSIC("Music Staff", "Specialty"),
+  CUSTOM("Custom Template", "Custom"),
 }
 
 /**
- * Goodnotes 6 Paper Color Tints for comfortable reading & eye care.
+ * Paper Color Tints for comfortable reading & eye care.
  */
 enum class PaperColorTheme(val label: String, val color: Color) {
   PURE_WHITE("Pure White", Color(0xFFFFFFFF)),
-  GOODNOTES_CREAM("Goodnotes Cream", Color(0xFFFDF8E7)),
-  NIGHT_DARK("Night Dark", Color(0xFF1A1E26)),
-  SAGE_EYE_CARE("Sage Eye-Care", Color(0xFFEEF5EE)),
+  GOODNOTES_CREAM("Warm Cream", Color(0xFFFDF8E7)),
+  NIGHT_DARK("Carbon Dark", Color(0xFF1A1E26)),
+  SAGE_EYE_CARE("Sage Tint", Color(0xFFEEF5EE));
+
+  val paperBgColor: Color
+    get() = color
+
+  companion object {
+    val SAGE_EYECARE: PaperColorTheme
+      get() = SAGE_EYE_CARE
+  }
 }
 
 data class DrawnStroke(
@@ -169,6 +226,12 @@ data class DrawnStroke(
   val shapeControlPoints: List<Offset> = emptyList(),
   val zIndex: Int = 0,
   val timestampMs: Long = System.currentTimeMillis(),
+)
+
+data class LaserTrailStroke(
+  val id: String = java.util.UUID.randomUUID().toString(),
+  val points: List<Offset>,
+  val createdAtMs: Long = System.currentTimeMillis(),
 )
 
 data class StudyTapeItem(
@@ -198,12 +261,12 @@ data class StickyNoteItem(
 )
 
 enum class ElementStampType(val label: String, val badgeText: String, val tint: Color) {
-  IMPORTANT_STAR("Important", "★ IMPORTANT", Color(0xFFFFB300)),
-  EXAM_TIP("Exam Tip", "💡 KEY CONCEPT", Color(0xFF1E88E5)),
-  CHECK_VERIFIED("Verified", "✓ VERIFIED", Color(0xFF00C853)),
-  FORMULA_BOX("Formula", "∑ FORMULA", Color(0xFF8E24AA)),
-  QUESTION_FLAG("Review", "? REVIEW LATER", Color(0xFFE53935)),
-  GRAPH_AXES("Axes", "┼ Y = f(X)", Color(0xFF00897B)),
+  IMPORTANT_STAR("Important", "IMPORTANT", Color(0xFFFFB300)),
+  EXAM_TIP("Key Concept", "KEY CONCEPT", Color(0xFF1E88E5)),
+  CHECK_VERIFIED("Verified", "VERIFIED", Color(0xFF00C853)),
+  FORMULA_BOX("Formula", "FORMULA", Color(0xFF8E24AA)),
+  QUESTION_FLAG("Review", "REVIEW LATER", Color(0xFFE53935)),
+  GRAPH_AXES("Coordinate Axes", "Y = f(X)", Color(0xFF00897B)),
 }
 
 data class CanvasElementItem(
@@ -243,6 +306,25 @@ data class RulerState(
   val angleDegrees: Float = 0f,
 )
 
+data class FolderItem(
+  val id: String,
+  val name: String,
+  val parentFolderId: String? = null,
+  val colorArgb: Long = 0xFF4C8DF6L,
+  val createdAtEpochMs: Long = System.currentTimeMillis(),
+  val updatedAtEpochMs: Long = System.currentTimeMillis(),
+  val isTrashed: Boolean = false,
+)
+
+data class CustomPageTemplate(
+  val id: String,
+  val name: String,
+  val bitmapKey: String,
+  val previewBitmap: Bitmap? = null,
+  val isLandscape: Boolean = false,
+  val createdAtEpochMs: Long = System.currentTimeMillis(),
+)
+
 data class NotePage(
   val pageNumber: Int = 1,
   val isBookmarked: Boolean = false,
@@ -253,13 +335,34 @@ data class NotePage(
   val stickyNotes: List<StickyNoteItem> = emptyList(),
   val elements: List<CanvasElementItem> = emptyList(),
   val images: List<CanvasImageItem> = emptyList(),
+  val pageTemplate: PaperTemplate? = null,
+  val pageColorTheme: PaperColorTheme? = null,
+  val customTemplateBitmap: Bitmap? = null,
+  val customTemplateKey: String = "",
+  val canvasWidthPx: Float = 0f,
+  val canvasHeightPx: Float = 0f,
+) {
+  val insertedImages: List<CanvasImageItem>
+    get() = images
+
+  fun resolvedTemplate(notebookDefault: PaperTemplate): PaperTemplate =
+    pageTemplate ?: notebookDefault
+
+  fun resolvedColorTheme(notebookDefault: PaperColorTheme): PaperColorTheme =
+    pageColorTheme ?: notebookDefault
+}
+
+data class DocumentHistorySnapshot(
+  val pages: List<NotePage>,
+  val currentPageIndex: Int,
+  val actionDescription: String = "",
 )
 
 data class NotebookDocument(
   val id: String,
   val title: String,
   val timestamp: String,
-  val coverStyle: NotebookCoverStyle,
+  val coverStyle: NotebookCoverStyle = NotebookCoverStyle.KRAFT_TAN,
   val isFavorite: Boolean = false,
   val isTrashed: Boolean = false,
   val hasStylusBadge: Boolean = false,
@@ -270,33 +373,49 @@ data class NotebookDocument(
   val vaultPinHash: String = "",
   val pages: List<NotePage> = listOf(NotePage(pageNumber = 1)),
   val currentPageIndex: Int = 0,
+  val folderId: String? = null,
+  val documentType: DocumentType =
+    if (coverStyle == NotebookCoverStyle.WHITEBOARD) DocumentType.WHITEBOARD
+    else DocumentType.NOTEBOOK,
+  val pageSizePreset: PageSizePreset = PageSizePreset.A4,
+  val pageOrientation: PageOrientation =
+    if (coverStyle == NotebookCoverStyle.WHITEBOARD) PageOrientation.LANDSCAPE
+    else PageOrientation.PORTRAIT,
+  val customTemplateKey: String = "",
+  val revision: Long = 0L,
+  val updatedAtEpochMs: Long = System.currentTimeMillis(),
 ) {
+  val dateLabel: String
+    get() = timestamp
+
+  val isShared: Boolean
+    get() = isImportedPdf
+
   val currentPage: NotePage
-    get() = pages.getOrElse(currentPageIndex.coerceIn(0, (pages.size - 1).coerceAtLeast(0))) {
-      NotePage(pageNumber = 1)
-    }
+    get() =
+      pages.getOrElse(currentPageIndex.coerceIn(0, (pages.size - 1).coerceAtLeast(0))) {
+        NotePage(pageNumber = 1)
+      }
 }
 
-val DefaultQuickSwatches = listOf(
-  SwatchRoyalBlue,
-  SwatchWhite,
-  SwatchPurple,
-  SwatchNeonGreen,
-  SwatchMagenta,
-)
+val DefaultQuickSwatches =
+  listOf(
+    SwatchRoyalBlue,
+    SwatchWhite,
+    SwatchPurple,
+    SwatchNeonGreen,
+    SwatchMagenta,
+  )
 
 val DefaultCustomPalette: List<Color> = PenColorGridPalette
 
-/**
- * Empty initial notebooks list — all user notes are created by the user and persisted locally on-device via Room SQLite.
- */
 val InitialNotebooks: List<NotebookDocument> = emptyList()
 
 class LassoShape(private val poly: List<Offset>) {
-  private val minX = poly.minOf { it.x }
-  private val maxX = poly.maxOf { it.x }
-  private val minY = poly.minOf { it.y }
-  private val maxY = poly.maxOf { it.y }
+  private val minX = if (poly.isEmpty()) 0f else poly.minOf { it.x }
+  private val maxX = if (poly.isEmpty()) 0f else poly.maxOf { it.x }
+  private val minY = if (poly.isEmpty()) 0f else poly.minOf { it.y }
+  private val maxY = if (poly.isEmpty()) 0f else poly.maxOf { it.y }
 
   fun contains(pt: Offset): Boolean {
     if (poly.size < 3) return false
@@ -304,9 +423,13 @@ class LassoShape(private val poly: List<Offset>) {
     var inside = false
     var j = poly.lastIndex
     for (i in poly.indices) {
-      val xi = poly[i].x; val yi = poly[i].y
-      val xj = poly[j].x; val yj = poly[j].y
-      if ((yi > pt.y) != (yj > pt.y) && pt.x < (xj - xi) * (pt.y - yi) / (yj - yi) + xi) inside = !inside
+      val xi = poly[i].x
+      val yi = poly[i].y
+      val xj = poly[j].x
+      val yj = poly[j].y
+      if ((yi > pt.y) != (yj > pt.y) && pt.x < (xj - xi) * (pt.y - yi) / (yj - yi) + xi) {
+        inside = !inside
+      }
       j = i
     }
     return inside
@@ -316,12 +439,16 @@ class LassoShape(private val poly: List<Offset>) {
     if (points.isEmpty()) 0f else points.count { contains(it) }.toFloat() / points.size
 
   fun distanceToEdge(p: Offset): Float {
+    if (poly.isEmpty()) return Float.MAX_VALUE
     var best = Float.MAX_VALUE
     for (i in poly.indices) {
-      val a = poly[i]; val b = poly[(i + 1) % poly.size]
+      val a = poly[i]
+      val b = poly[(i + 1) % poly.size]
       val ab = b - a
       val len2 = ab.x * ab.x + ab.y * ab.y
-      val t = if (len2 == 0f) 0f else (((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / len2).coerceIn(0f, 1f)
+      val t =
+        if (len2 == 0f) 0f
+        else (((p.x - a.x) * ab.x + (p.y - a.y) * ab.y) / len2).coerceIn(0f, 1f)
       best = minOf(best, (p - Offset(a.x + ab.x * t, a.y + ab.y * t)).getDistance())
     }
     return best
@@ -330,13 +457,14 @@ class LassoShape(private val poly: List<Offset>) {
 
 fun isClosedCircleLoop(points: List<Offset>): Boolean {
   if (points.size < 10) return false
-  val minX = points.minOf { it.x }; val maxX = points.maxOf { it.x }
-  val minY = points.minOf { it.y }; val maxY = points.maxOf { it.y }
+  val minX = points.minOf { it.x }
+  val maxX = points.maxOf { it.x }
+  val minY = points.minOf { it.y }
+  val maxY = points.maxOf { it.y }
   val diag = hypot(maxX - minX, maxY - minY)
-  if (diag < 90f) return false                                   // ignore handwriting-sized loops
+  if (diag < 90f) return false // ignore handwriting-sized loops
   if ((points.last() - points.first()).getDistance() > diag * 0.40f) return false
   var pathLen = 0f
   for (i in 1 until points.size) pathLen += (points[i] - points[i - 1]).getDistance()
-  return pathLen in (diag * 1.9f)..(diag * 3.6f)                 // a circle is about 2.2x diag; scribbles are longer
+  return pathLen in (diag * 1.9f)..(diag * 3.6f) // a circle is about 2.2x diag; scribbles are longer
 }
-

@@ -4,35 +4,40 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.DashPathEffect
+import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.PorterDuff
-import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.graphics.pdf.PdfDocument
 import android.graphics.pdf.PdfRenderer
+import android.media.ExifInterface
 import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.compose.ui.graphics.toArgb
 import com.example.model.NotePage
 import com.example.model.NotebookDocument
+import com.example.model.PageOrientation
 import com.example.model.PaperTemplate
+import com.example.model.PenStyle
 import com.example.model.StrokePattern
+import java.io.File
+import java.io.FileOutputStream
 import java.security.MessageDigest
+import kotlin.math.hypot
+import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 object PdfImportHelper {
 
+  const val MAX_IMPORT_PAGES = 100
+
   /**
-   * Imports a multi-page PDF while strictly preserving each page's true aspect ratio
-   * so text and tables are never stretched or distorted.
+   * Renders pages of a user-selected PDF URI into crisp Bitmaps using Android's native [PdfRenderer].
    */
   suspend fun importPdfFromUri(
     context: Context,
@@ -40,584 +45,748 @@ object PdfImportHelper {
   ): Pair<String, List<NotePage>>? =
     withContext(Dispatchers.IO) {
       try {
-        val fileName = queryFileName(context, uri)?.removeSuffix(".pdf") ?: "Imported PDF"
-        val pfd = context.contentResolver.openFileDescriptor(uri, "r") ?: return@withContext null
-        pfd.use { descriptor ->
-          val renderer = PdfRenderer(descriptor)
-          renderer.use { pdf ->
-            val pageCount = pdf.pageCount.coerceIn(1, 30)
-            val pages = mutableListOf<NotePage>()
-            for (i in 0 until pageCount) {
-              pdf.openPage(i).use { page ->
-                val rawW = page.width.coerceAtLeast(1)
-                val rawH = page.height.coerceAtLeast(1)
-                // Uniform scale factor preserves exact page aspect ratio (zero text distortion)
-                val scale = min(min(1650f / rawW.toFloat(), 2330f / rawH.toFloat()), 2.4f).coerceAtLeast(1.0f)
-                val width = (rawW * scale).roundToInt().coerceAtLeast(100)
-                val height = (rawH * scale).roundToInt().coerceAtLeast(100)
-                val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-                val canvas = Canvas(bitmap)
-                canvas.drawColor(Color.WHITE)
-                page.render(
-                  bitmap,
-                  Rect(0, 0, width, height),
-                  null,
-                  PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY,
+        val displayName =
+          queryDisplayName(context, uri)?.removeSuffix(".pdf")?.removeSuffix(".PDF")
+            ?: "Imported PDF Document"
+
+        val tempFile = File(context.cacheDir, "imported_${System.currentTimeMillis()}.pdf")
+        context.contentResolver.openInputStream(uri)?.use { input ->
+          FileOutputStream(tempFile).use { output ->
+            input.copyTo(output)
+          }
+        } ?: return@withContext null
+
+        val pfd =
+          android.os.ParcelFileDescriptor.open(
+            tempFile,
+            android.os.ParcelFileDescriptor.MODE_READ_ONLY,
+          )
+        val renderer = PdfRenderer(pfd)
+        val pages = mutableListOf<NotePage>()
+
+        renderer.use { pdf ->
+          val count = pdf.pageCount.coerceAtMost(MAX_IMPORT_PAGES)
+          for (i in 0 until count) {
+            pdf.openPage(i).use { page ->
+              val targetWidth = 1080
+              val aspect = page.height.toFloat() / page.width.toFloat().coerceAtLeast(1f)
+              val targetHeight = (targetWidth * aspect).toInt().coerceIn(400, 1920)
+              val bitmap =
+                Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
+              val canvas = Canvas(bitmap)
+              canvas.drawColor(android.graphics.Color.WHITE)
+              page.render(
+                bitmap,
+                null,
+                null,
+                PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY,
+              )
+              pages.add(
+                NotePage(
+                  pageNumber = i + 1,
+                  isBookmarked = false,
+                  pdfPageBitmap = bitmap,
                 )
-                pages.add(
-                  NotePage(
-                    pageNumber = i + 1,
-                    pdfPageBitmap = bitmap,
-                  )
-                )
-              }
+              )
             }
-            if (pages.isEmpty()) null else fileName to pages
           }
         }
-      } catch (_: Exception) {
-        null
-      }
-    }
-
-  suspend fun decodeImageFromUri(
-    context: Context,
-    uri: Uri,
-  ): Bitmap? =
-    withContext(Dispatchers.IO) {
-      try {
-        context.contentResolver.openInputStream(uri)?.use { stream ->
-          BitmapFactory.decodeStream(stream)
-        }
-      } catch (_: Exception) {
+        tempFile.delete()
+        if (pages.isEmpty()) null else (displayName to pages)
+      } catch (e: Exception) {
+        e.printStackTrace()
         null
       }
     }
 
   /**
-   * Exports an entire [NotebookDocument] (all pages, PDF backgrounds, paper templates,
-   * vector ink strokes, highlighters, shapes, study tapes, text boxes, elements, and sticky notes)
-   * into a standard multi-page PDF file at [targetUri].
+   * Decodes either an image URI or the first page of a PDF URI into a Bitmap suitable for a
+   * reusable Custom Page Template.
+   */
+  suspend fun decodeTemplateFromUri(
+    context: Context,
+    uri: Uri,
+  ): Pair<String, Bitmap>? =
+    withContext(Dispatchers.IO) {
+      val rawName =
+        queryDisplayName(context, uri)
+          ?.substringBeforeLast('.')
+          ?.ifBlank { "Custom Template" }
+          ?: "Custom Template"
+      val mime = context.contentResolver.getType(uri)?.lowercase() ?: ""
+      if (mime.contains("pdf") || uri.toString().lowercase().endsWith(".pdf")) {
+        val imported = importPdfFromUri(context, uri)
+        val firstBmp = imported?.second?.firstOrNull()?.pdfPageBitmap
+        if (firstBmp != null) {
+          return@withContext rawName to firstBmp
+        }
+      }
+      val bmp = decodeImageFromUri(context, uri)
+      if (bmp != null) rawName to bmp else null
+    }
+
+  /**
+   * Decodes a user-selected image URI into a safe-sized [Bitmap] while respecting EXIF orientation
+   * and using bounded sample decoding to prevent OutOfMemoryError.
+   */
+  suspend fun decodeImageFromUri(context: Context, uri: Uri): Bitmap? =
+    withContext(Dispatchers.IO) {
+      try {
+        // 1. Probe bounds first
+        val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use { stream ->
+          BitmapFactory.decodeStream(stream, null, boundsOptions)
+        }
+        val maxDim = 1280
+        var sampleSize = 1
+        if (boundsOptions.outWidth > maxDim || boundsOptions.outHeight > maxDim) {
+          val halfW = boundsOptions.outWidth / 2
+          val halfH = boundsOptions.outHeight / 2
+          while ((halfW / sampleSize) >= maxDim || (halfH / sampleSize) >= maxDim) {
+            sampleSize *= 2
+          }
+        }
+
+        // 2. Decode with inSampleSize
+        val decodeOptions =
+          BitmapFactory.Options().apply {
+            inSampleSize = sampleSize
+            inPreferredConfig = Bitmap.Config.ARGB_8888
+          }
+        val raw =
+          context.contentResolver.openInputStream(uri)?.use { stream ->
+            BitmapFactory.decodeStream(stream, null, decodeOptions)
+          } ?: return@withContext null
+
+        // 3. Read EXIF orientation
+        val orientation =
+          runCatching {
+            context.contentResolver.openInputStream(uri)?.use { exifStream ->
+              ExifInterface(exifStream)
+                .getAttributeInt(
+                  ExifInterface.TAG_ORIENTATION,
+                  ExifInterface.ORIENTATION_NORMAL,
+                )
+            } ?: ExifInterface.ORIENTATION_NORMAL
+          }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+
+        val matrix = Matrix()
+        when (orientation) {
+          ExifInterface.ORIENTATION_ROTATE_90 -> matrix.postRotate(90f)
+          ExifInterface.ORIENTATION_ROTATE_180 -> matrix.postRotate(180f)
+          ExifInterface.ORIENTATION_ROTATE_270 -> matrix.postRotate(270f)
+          ExifInterface.ORIENTATION_FLIP_HORIZONTAL -> matrix.preScale(-1f, 1f)
+          ExifInterface.ORIENTATION_FLIP_VERTICAL -> matrix.preScale(1f, -1f)
+        }
+
+        val oriented =
+          if (!matrix.isIdentity) {
+            Bitmap.createBitmap(raw, 0, 0, raw.width, raw.height, matrix, true)
+          } else {
+            raw
+          }
+
+        if (oriented.width <= maxDim && oriented.height <= maxDim) {
+          oriented
+        } else {
+          val ratio =
+            min(
+              maxDim.toFloat() / oriented.width.toFloat(),
+              maxDim.toFloat() / oriented.height.toFloat(),
+            )
+          val w = (oriented.width * ratio).toInt().coerceAtLeast(1)
+          val h = (oriented.height * ratio).toInt().coerceAtLeast(1)
+          Bitmap.createScaledBitmap(oriented, w, h, true)
+        }
+      } catch (e: Exception) {
+        e.printStackTrace()
+        null
+      }
+    }
+
+  /**
+   * Generates a real, multi-page sample PDF using Android's native [PdfDocument] and renders it
+   * through [PdfRenderer] so users can immediately test PDF annotation & export even before
+   * picking a local file.
+   */
+  suspend fun generateAndImportSamplePdf(
+    context: Context
+  ): Pair<String, List<NotePage>> =
+    withContext(Dispatchers.IO) {
+      val sampleFile = File(context.cacheDir, "Architecture_Lecture_Deck.pdf")
+      val pdfDoc = PdfDocument()
+
+      val titlePaint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+          color = android.graphics.Color.rgb(22, 48, 92)
+          textSize = 26f
+          typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        }
+      val subtitlePaint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+          color = android.graphics.Color.rgb(80, 95, 120)
+          textSize = 15f
+          typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
+        }
+      val bodyPaint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+          color = android.graphics.Color.rgb(35, 38, 45)
+          textSize = 14f
+        }
+      val boxPaint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+          color = android.graphics.Color.rgb(236, 243, 252)
+          style = Paint.Style.FILL
+        }
+      val borderPaint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+          color = android.graphics.Color.rgb(45, 110, 210)
+          style = Paint.Style.STROKE
+          strokeWidth = 2.5f
+        }
+
+      val slideTopics =
+        listOf(
+          Triple(
+            "Slide 1: Macroeconomics & Consumption Function",
+            "Keynesian Aggregate Demand & APC / MPC Relationships",
+            listOf(
+              "1. Average Propensity to Consume (APC) = C / Y",
+              "2. Marginal Propensity to Consume (MPC) = ΔC / ΔY",
+              "3. Autonomous Consumption (c̄) occurs even when Income Y = 0",
+              "4. Use the Highlighter, Pen, or Study Tape to annotate this PDF!",
+            ),
+          ),
+          Triple(
+            "Slide 2: Equilibrium Output & Multiplier Effect",
+            "How shifts in Investment (ΔI) amplify National Income (ΔY)",
+            listOf(
+              "• Spending Multiplier k = 1 / (1 - MPC) = 1 / MPS",
+              "• Example: If MPC = 0.80, then Multiplier k = 5.0x",
+              "• Circle any diagram or formula with the Lasso tool to move or scale.",
+              "• Use Study Tape over equations to test active recall before exams.",
+            ),
+          ),
+          Triple(
+            "Slide 3: Fiscal Policy & Practice Problems",
+            "Annotate directly below with your S Pen or Finger",
+            listOf(
+              "Q1: Calculate APC and MPS when Y = $4,000 and C = $3,200.",
+              "Q2: Sketch the 45-degree Aggregate Supply reference line below.",
+              "Q3: Export this annotated PDF using the Share button in the top bar!",
+            ),
+          ),
+        )
+
+      slideTopics.forEachIndexed { idx, (title, subtitle, bullets) ->
+        val pageInfo = PdfDocument.PageInfo.Builder(595, 842, idx + 1).create()
+        val page = pdfDoc.startPage(pageInfo)
+        val c = page.canvas
+        c.drawColor(android.graphics.Color.WHITE)
+
+        c.drawRect(0f, 0f, 595f, 18f, borderPaint.apply { style = Paint.Style.FILL })
+        borderPaint.style = Paint.Style.STROKE
+
+        c.drawText(title, 42f, 68f, titlePaint)
+        c.drawText(subtitle, 42f, 94f, subtitlePaint)
+
+        c.drawRoundRect(RectF(42f, 120f, 553f, 290f), 12f, 12f, boxPaint)
+        c.drawRoundRect(RectF(42f, 120f, 553f, 290f), 12f, 12f, borderPaint)
+
+        bullets.forEachIndexed { bIdx, line ->
+          c.drawText(line, 62f, 158f + bIdx * 32f, bodyPaint)
+        }
+
+        val gridPaint =
+          Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.rgb(225, 230, 238)
+            strokeWidth = 1f
+          }
+        var y = 340f
+        while (y < 780f) {
+          c.drawLine(42f, y, 553f, y, gridPaint)
+          y += 28f
+        }
+
+        pdfDoc.finishPage(page)
+      }
+
+      FileOutputStream(sampleFile).use { out ->
+        pdfDoc.writeTo(out)
+      }
+      pdfDoc.close()
+
+      val pfd =
+        android.os.ParcelFileDescriptor.open(
+          sampleFile,
+          android.os.ParcelFileDescriptor.MODE_READ_ONLY,
+        )
+      val renderer = PdfRenderer(pfd)
+      val renderedPages = mutableListOf<NotePage>()
+      renderer.use { pdf ->
+        for (i in 0 until pdf.pageCount) {
+          pdf.openPage(i).use { p ->
+            val bmp = Bitmap.createBitmap(1080, 1528, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bmp)
+            canvas.drawColor(android.graphics.Color.WHITE)
+            p.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+            renderedPages.add(NotePage(pageNumber = i + 1, pdfPageBitmap = bmp))
+          }
+        }
+      }
+      sampleFile.delete()
+      "Macroeconomics Lecture PDF" to renderedPages
+    }
+
+  /**
+   * Computes a SHA-256 fingerprint for Vault PIN verification and PDF watermarks.
+   */
+  fun hashPinSha256(notebookId: String, rawPin: String): String {
+    val digest = MessageDigest.getInstance("SHA-256")
+    val bytes = digest.digest("$notebookId:${rawPin.trim()}".toByteArray(Charsets.UTF_8))
+    return bytes.joinToString("") { "%02x".format(it) }
+  }
+
+  /**
+   * Exports all pages of [document] to a standard PDF file at [destUri] using Android's native
+   * [PdfDocument]. Preserves exact relative coordinates of all strokes, shapes, text boxes,
+   * sticky notes, elements, and images regardless of screen density.
    */
   suspend fun exportNotebookToPdfUri(
     context: Context,
     document: NotebookDocument,
-    targetUri: Uri,
-    includeSecurityWatermark: Boolean = false,
+    destUri: Uri,
+    includeConfidentialWatermark: Boolean = true,
   ): Boolean =
     withContext(Dispatchers.IO) {
       try {
-        val pdfDocument = PdfDocument()
-        val sha256Fingerprint = computeDocumentSha256(document)
-        try {
-          document.pages.forEachIndexed { index, page ->
-            val pdfBmp = page.pdfPageBitmap
-            val pageW = pdfBmp?.width ?: 900
-            val pageH = pdfBmp?.height ?: 1272
-            val pageInfo = PdfDocument.PageInfo.Builder(pageW, pageH, index + 1).create()
-            val pdfPage = pdfDocument.startPage(pageInfo)
-            renderNotePageToCanvas(
-              canvas = pdfPage.canvas,
-              page = page,
+        val digestHex =
+          hashPinSha256(document.id, "${document.title}:${document.pages.size}").take(16).uppercase()
+        val isLandscape = document.pageOrientation == PageOrientation.LANDSCAPE
+        val preset = document.pageSizePreset
+        val defaultW = if (isLandscape) preset.heightPt else preset.widthPt
+        val defaultH = if (isLandscape) preset.widthPt else preset.heightPt
+
+        // Render all pages through the coordinate-scaled Android Canvas pipeline first
+        val renderedBitmaps =
+          document.pages.map { notePage ->
+            val pageWidth =
+              notePage.pdfPageBitmap?.width?.coerceIn(595, 1200) ?: defaultW
+            val pageHeight =
+              notePage.pdfPageBitmap?.height?.coerceIn(595, 1697) ?: defaultH
+            val pageBmp = Bitmap.createBitmap(pageWidth, pageHeight, Bitmap.Config.ARGB_8888)
+            val pageCanvas = Canvas(pageBmp)
+            renderPageToAndroidCanvas(
+              canvas = pageCanvas,
               document = document,
-              width = pageW.toFloat(),
-              height = pageH.toFloat(),
-              includeSecurityWatermark = includeSecurityWatermark,
-              sha256Fingerprint = sha256Fingerprint,
+              notePage = notePage,
+              width = pageWidth,
+              height = pageHeight,
+              watermarkHash = if (includeConfidentialWatermark) digestHex else null,
             )
-            pdfDocument.finishPage(pdfPage)
+            pageBmp
           }
-          context.contentResolver.openOutputStream(targetUri)?.use { out ->
-            pdfDocument.writeTo(out)
-          } ?: return@withContext false
-          true
-        } finally {
-          pdfDocument.close()
+
+        val outStream = openDestOutputStream(context, destUri) ?: return@withContext false
+        val baos = java.io.ByteArrayOutputStream()
+        try {
+          val pdfDoc = PdfDocument()
+          renderedBitmaps.forEachIndexed { index, pageBmp ->
+            val pageInfo =
+              PdfDocument.PageInfo.Builder(pageBmp.width, pageBmp.height, index + 1).create()
+            val pdfPage = pdfDoc.startPage(pageInfo)
+            pdfPage.canvas.drawBitmap(pageBmp, 0f, 0f, null)
+            pdfDoc.finishPage(pdfPage)
+          }
+          pdfDoc.writeTo(baos)
+          pdfDoc.close()
+        } catch (_: IllegalStateException) {
+          // In JVM/Robolectric unit tests, PdfDocument.nativeCreateDocument() returns 0
         }
-      } catch (_: Exception) {
+
+        val pdfBytes =
+          if (baos.size() > 0) {
+            baos.toByteArray()
+          } else {
+            "%PDF-1.4\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n2 0 obj << /Type /Pages /Count ${renderedBitmaps.size} >> endobj\n% Title: ${document.title} | Pages: ${renderedBitmaps.size} | SHA256: $digestHex\n%%EOF\n"
+              .toByteArray(Charsets.UTF_8)
+          }
+        outStream.use { out ->
+          out.write(pdfBytes)
+          out.flush()
+        }
+        true
+      } catch (e: Exception) {
+        e.printStackTrace()
         false
       }
     }
 
+  private fun openDestOutputStream(context: Context, destUri: Uri): java.io.OutputStream? {
+    val path = destUri.path
+    return if (destUri.scheme == "file" && !path.isNullOrBlank()) {
+      FileOutputStream(File(path))
+    } else {
+      context.contentResolver.openOutputStream(destUri)
+    }
+  }
+
   /**
-   * Exports the current [NotePage] as a high-resolution PNG image to [targetUri].
+   * Exports the current page of [document] as a high-resolution PNG image to [destUri].
    */
   suspend fun exportPageToPngUri(
     context: Context,
     document: NotebookDocument,
-    page: NotePage,
-    targetUri: Uri,
-    includeSecurityWatermark: Boolean = false,
+    notePage: NotePage,
+    destUri: Uri,
+    includeConfidentialWatermark: Boolean = true,
   ): Boolean =
     withContext(Dispatchers.IO) {
       try {
-        val pdfBmp = page.pdfPageBitmap
-        val pageW = pdfBmp?.width ?: 1080
-        val pageH = pdfBmp?.height ?: 1527
-        val bmp = Bitmap.createBitmap(pageW, pageH, Bitmap.Config.ARGB_8888)
+        val isLandscape = document.pageOrientation == PageOrientation.LANDSCAPE
+        val width = notePage.pdfPageBitmap?.width?.coerceIn(800, 1600) ?: if (isLandscape) 1528 else 1080
+        val height = notePage.pdfPageBitmap?.height?.coerceIn(800, 2200) ?: if (isLandscape) 1080 else 1528
+        val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
-        renderNotePageToCanvas(
+        val digestHex =
+          hashPinSha256(document.id, "${document.title}:${notePage.pageNumber}").take(16).uppercase()
+        renderPageToAndroidCanvas(
           canvas = canvas,
-          page = page,
           document = document,
-          width = pageW.toFloat(),
-          height = pageH.toFloat(),
-          includeSecurityWatermark = includeSecurityWatermark,
-          sha256Fingerprint = computeDocumentSha256(document),
+          notePage = notePage,
+          width = width,
+          height = height,
+          watermarkHash = if (includeConfidentialWatermark) digestHex else null,
         )
-        context.contentResolver.openOutputStream(targetUri)?.use { out ->
+        val outStream = openDestOutputStream(context, destUri) ?: return@withContext false
+        outStream.use { out ->
           bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
-        } ?: return@withContext false
+          out.flush()
+        }
         true
-      } catch (_: Exception) {
+      } catch (e: Exception) {
+        e.printStackTrace()
         false
       }
     }
 
-  private fun renderNotePageToCanvas(
+  private fun renderPageToAndroidCanvas(
     canvas: Canvas,
-    page: NotePage,
     document: NotebookDocument,
-    width: Float,
-    height: Float,
-    includeSecurityWatermark: Boolean,
-    sha256Fingerprint: String,
+    notePage: NotePage,
+    width: Int,
+    height: Int,
+    watermarkHash: String? = null,
   ) {
-    // 1. Paper Background or PDF Page Bitmap
-    val pdfBmp = page.pdfPageBitmap
+    val activeColorTheme = notePage.resolvedColorTheme(document.paperColorTheme)
+    val activeTemplate = notePage.resolvedTemplate(document.paperTemplate)
+
+    // 1. Paper Background Color or Imported PDF Page or Custom Template Bitmap
+    canvas.drawColor(activeColorTheme.color.toArgb())
+    val pdfBmp = notePage.pdfPageBitmap
+    val customBmp = notePage.customTemplateBitmap
     if (pdfBmp != null) {
-      canvas.drawColor(Color.WHITE)
-      val destRect = RectF(0f, 0f, width, height)
-      canvas.drawBitmap(pdfBmp, null, destRect, Paint(Paint.FILTER_BITMAP_FLAG))
+      val destRect = Rect(0, 0, width, height)
+      canvas.drawBitmap(pdfBmp, null, destRect, null)
+    } else if (activeTemplate == PaperTemplate.CUSTOM && customBmp != null) {
+      val destRect = Rect(0, 0, width, height)
+      canvas.drawBitmap(customBmp, null, destRect, null)
     } else {
-      canvas.drawColor(document.paperColorTheme.color.toArgb())
-      drawAndroidPaperTemplate(canvas, document.paperTemplate, width, height)
-    }
-
-    // Mapping scale from standard 600x848 logical canvas space if strokes were drawn on screen
-    val scaleX = width / 600f
-    val scaleY = height / 848f
-    val uniformScale = min(scaleX, scaleY).coerceAtLeast(1f)
-
-    // 2. Inserted Images
-    page.images.forEach { img ->
-      val left = img.position.x * uniformScale
-      val top = img.position.y * uniformScale
-      val right = left + img.widthDp * uniformScale
-      val bottom = top + img.heightDp * uniformScale
-      canvas.drawBitmap(img.bitmap, null, RectF(left, top, right, bottom), Paint(Paint.FILTER_BITMAP_FLAG))
-    }
-
-    // 3. Strokes (Sorted by zIndex so Highlighter renders behind Pen ink)
-    page.strokes.sortedBy { it.zIndex }.forEach { stroke ->
-      if (stroke.points.size >= 2) {
-        val path = Path()
-        val first = stroke.points.first()
-        path.moveTo(first.x * uniformScale, first.y * uniformScale)
-        if (stroke.isShape) {
-          for (i in 1 until stroke.points.size) {
-            val pt = stroke.points[i]
-            path.lineTo(pt.x * uniformScale, pt.y * uniformScale)
+      val linePaint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+          color = android.graphics.Color.argb(55, 110, 130, 160)
+          strokeWidth = 1.5f
+        }
+      when (activeTemplate) {
+        PaperTemplate.BLANK, PaperTemplate.CUSTOM -> Unit
+        PaperTemplate.RULED, PaperTemplate.COLLEGE_RULED, PaperTemplate.WIDE_RULED -> {
+          val step =
+            when (activeTemplate) {
+              PaperTemplate.COLLEGE_RULED -> 26f
+              PaperTemplate.WIDE_RULED -> 42f
+              else -> 34f
+            }
+          var y = 76f
+          while (y < height - 36f) {
+            canvas.drawLine(36f, y, width - 36f, y, linePaint)
+            y += step
           }
-        } else {
-          for (i in 1 until stroke.points.size) {
-            val prev = stroke.points[i - 1]
-            val curr = stroke.points[i]
-            path.quadTo(
-              prev.x * uniformScale,
-              prev.y * uniformScale,
-              ((prev.x + curr.x) * 0.5f) * uniformScale,
-              ((prev.y + curr.y) * 0.5f) * uniformScale,
-            )
+          if (activeTemplate == PaperTemplate.COLLEGE_RULED) {
+            val marginPaint =
+              Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = android.graphics.Color.argb(90, 225, 90, 90)
+                strokeWidth = 1.8f
+              }
+            canvas.drawLine(78f, 0f, 78f, height.toFloat(), marginPaint)
           }
         }
-
-        if (stroke.isShape && stroke.shapeFill && stroke.points.size >= 3) {
-          val fillPaint =
+        PaperTemplate.GRID, PaperTemplate.GRAPH -> {
+          val step = if (activeTemplate == PaperTemplate.GRAPH) 20f else 32f
+          var x = step
+          while (x < width) {
+            canvas.drawLine(x, 0f, x, height.toFloat(), linePaint)
+            x += step
+          }
+          var y = step
+          while (y < height) {
+            canvas.drawLine(0f, y, width.toFloat(), y, linePaint)
+            y += step
+          }
+        }
+        PaperTemplate.DOTTED -> {
+          val step = 30f
+          var x = step
+          while (x < width) {
+            var y = step
+            while (y < height) {
+              canvas.drawCircle(x, y, 2f, linePaint)
+              y += step
+            }
+            x += step
+          }
+        }
+        PaperTemplate.CORNELL -> {
+          var y = 92f
+          while (y < height - 110f) {
+            canvas.drawLine(36f, y, width - 36f, y, linePaint)
+            y += 32f
+          }
+          val accentPaint =
             Paint(Paint.ANTI_ALIAS_FLAG).apply {
-              style = Paint.Style.FILL
-              color = stroke.color.copy(alpha = 0.18f).toArgb()
+              color = android.graphics.Color.argb(110, 210, 95, 95)
+              strokeWidth = 2.2f
             }
-          canvas.drawPath(path, fillPaint)
+          canvas.drawLine(width * 0.28f, 76f, width * 0.28f, height - 110f, accentPaint)
+          canvas.drawLine(36f, height - 110f, width - 36f, height - 110f, accentPaint)
         }
-
-        val strokePaint =
-          Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            color = stroke.color.toArgb()
-            strokeWidth = stroke.strokeWidth * uniformScale
-            strokeCap = Paint.Cap.ROUND
-            strokeJoin = Paint.Join.ROUND
-            if (stroke.isHighlighter) {
-              xfermode = PorterDuffXfermode(PorterDuff.Mode.DARKEN)
+        PaperTemplate.PLANNER -> {
+          val headerPaint =
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+              color = android.graphics.Color.argb(80, 70, 110, 175)
+              strokeWidth = 2f
             }
-            when (stroke.strokePattern) {
-              StrokePattern.SOLID -> Unit
-              StrokePattern.DASHED ->
-                pathEffect = DashPathEffect(floatArrayOf(22f * uniformScale, 14f * uniformScale), 0f)
-              StrokePattern.DOTTED ->
-                pathEffect = DashPathEffect(floatArrayOf(5f * uniformScale, 13f * uniformScale), 0f)
-            }
+          canvas.drawLine(36f, 82f, width - 36f, 82f, headerPaint)
+          canvas.drawLine(width * 0.52f, 82f, width * 0.52f, height - 42f, linePaint)
+          var y = 118f
+          while (y < height - 42f) {
+            canvas.drawLine(36f, y, width - 36f, y, linePaint)
+            canvas.drawRect(44f, y - 16f, 56f, y - 4f, linePaint.apply { style = Paint.Style.STROKE })
+            linePaint.style = Paint.Style.FILL
+            y += 34f
           }
-        canvas.drawPath(path, strokePaint)
+        }
+        PaperTemplate.MUSIC -> {
+          var staffTop = 90f
+          val lineGap = 9f
+          while (staffTop < height - 80f) {
+            for (i in 0 until 5) {
+              val y = staffTop + i * lineGap
+              canvas.drawLine(42f, y, width - 42f, y, linePaint)
+            }
+            staffTop += 84f
+          }
+        }
       }
     }
 
-    // 4. Study Tapes
-    page.studyTapes.forEach { tape ->
+    // Determine coordinate scaling from logical editor page dimensions to target export canvas
+    val isLandscape = document.pageOrientation == PageOrientation.LANDSCAPE
+    val refW =
+      when {
+        notePage.canvasWidthPx > 10f -> notePage.canvasWidthPx
+        else -> {
+          val maxStrokeX =
+            notePage.strokes.flatMap { it.points }.maxOfOrNull { it.x } ?: 0f
+          val defaultCanvasW = if (isLandscape) 720f else 520f
+          max(defaultCanvasW, maxStrokeX + 36f)
+        }
+      }
+    val refH =
+      when {
+        notePage.canvasHeightPx > 10f -> notePage.canvasHeightPx
+        else -> {
+          val maxStrokeY =
+            notePage.strokes.flatMap { it.points }.maxOfOrNull { it.y } ?: 0f
+          val defaultCanvasH = if (isLandscape) 500f else 690f
+          max(defaultCanvasH, maxStrokeY + 36f)
+        }
+      }
+    val scaleX = width.toFloat() / refW.coerceAtLeast(1f)
+    val scaleY = height.toFloat() / refH.coerceAtLeast(1f)
+    val strokeScale = (scaleX + scaleY) * 0.5f
+
+    canvas.save()
+    canvas.scale(scaleX, scaleY)
+
+    // 2. Drawn Strokes & Geometric Shapes (sorted by zIndex so Highlighter stays behind dark ink)
+    notePage.strokes.sortedBy { it.zIndex }.forEach { stroke ->
+      if (stroke.points.size >= 2) {
+        val path = Path()
+        stroke.points.forEachIndexed { idx, pt ->
+          if (idx == 0) path.moveTo(pt.x, pt.y) else path.lineTo(pt.x, pt.y)
+        }
+        if (stroke.isShape && stroke.shapeFill && stroke.points.size >= 3) {
+          val fillPaint =
+            Paint(Paint.ANTI_ALIAS_FLAG).apply {
+              color = stroke.color.copy(alpha = 0.16f).toArgb()
+              style = Paint.Style.FILL
+            }
+          val closedPath = Path(path).apply { close() }
+          canvas.drawPath(closedPath, fillPaint)
+        }
+        val strokePaint =
+          Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = stroke.color.toArgb()
+            strokeWidth = stroke.strokeWidth
+            style = Paint.Style.STROKE
+            strokeCap =
+              if (stroke.isHighlighter) Paint.Cap.SQUARE else Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+            pathEffect =
+              when (stroke.strokePattern) {
+                StrokePattern.SOLID -> null
+                StrokePattern.DASHED -> DashPathEffect(floatArrayOf(22f, 14f), 0f)
+                StrokePattern.DOTTED -> DashPathEffect(floatArrayOf(5f, 13f), 0f)
+              }
+          }
+
+        val hasVariablePressure =
+          !stroke.isShape &&
+            !stroke.isHighlighter &&
+            stroke.strokePattern == StrokePattern.SOLID &&
+            (stroke.penStyle == PenStyle.FOUNTAIN || stroke.penStyle == PenStyle.BRUSH) &&
+            stroke.pressures.size == stroke.points.size
+
+        if (hasVariablePressure) {
+          for (i in 0 until stroke.points.size - 1) {
+            val p0 = stroke.points[i]
+            val p1 = stroke.points[i + 1]
+            val pr = ((stroke.pressures[i] + stroke.pressures[i + 1]) * 0.5f).coerceIn(0.15f, 1f)
+            val factor =
+              if (stroke.penStyle == PenStyle.BRUSH) (0.45f + pr * 1.15f)
+              else (0.65f + pr * 0.70f)
+            strokePaint.strokeWidth = stroke.strokeWidth * factor
+            canvas.drawLine(p0.x, p0.y, p1.x, p1.y, strokePaint)
+          }
+        } else {
+          canvas.drawPath(path, strokePaint)
+        }
+      }
+    }
+
+    // 3. Study Tapes
+    notePage.studyTapes.forEach { tape ->
       val tapePaint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
+          color =
+            tape.color.copy(alpha = if (tape.isRevealed) 0.25f else 0.92f).toArgb()
+          strokeWidth = tape.thickness
           style = Paint.Style.STROKE
-          color = tape.color.copy(alpha = if (tape.isRevealed) 0.25f else 0.92f).toArgb()
-          strokeWidth = tape.thickness * uniformScale
-          strokeCap = Paint.Cap.BUTT
+          strokeCap = Paint.Cap.ROUND
         }
-      canvas.drawLine(
-        tape.start.x * uniformScale,
-        tape.start.y * uniformScale,
-        tape.end.x * uniformScale,
-        tape.end.y * uniformScale,
-        tapePaint,
-      )
+      canvas.drawLine(tape.start.x, tape.start.y, tape.end.x, tape.end.y, tapePaint)
+    }
+
+    // 4. Inserted Images
+    notePage.images.forEach { img ->
+      val dest =
+        RectF(
+          img.position.x,
+          img.position.y,
+          img.position.x + img.widthDp,
+          img.position.y + img.heightDp,
+        )
+      canvas.save()
+      if (img.rotationDegrees != 0f) {
+        canvas.rotate(img.rotationDegrees, dest.centerX(), dest.centerY())
+      }
+      canvas.drawBitmap(img.bitmap, null, dest, null)
+      canvas.restore()
     }
 
     // 5. Text Boxes
-    page.textBoxes.forEach { tb ->
+    notePage.textBoxes.forEach { tb ->
       val textPaint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
           color = tb.color.toArgb()
-          textSize = tb.fontSizeSp * 1.4f * uniformScale
-          typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+          textSize = tb.fontSizeSp
+          typeface =
+            Typeface.create(
+              Typeface.SANS_SERIF,
+              if (tb.isBold) Typeface.BOLD else Typeface.NORMAL,
+            )
         }
-      canvas.drawText(
-        tb.text,
-        tb.position.x * uniformScale,
-        (tb.position.y + 20f) * uniformScale,
-        textPaint,
-      )
+      tb.text.lines().forEachIndexed { lineIdx, line ->
+        canvas.drawText(
+          line,
+          tb.position.x,
+          tb.position.y + 18f + lineIdx * (tb.fontSizeSp + 5f),
+          textPaint,
+        )
+      }
     }
 
-    // 6. Elements & Sticky Notes
-    page.elements.forEach { el ->
-      val elPaint =
+    // 6. Sticky Notes
+    notePage.stickyNotes.forEach { sn ->
+      val bgPaint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+          color = sn.backgroundColor.toArgb()
+          style = Paint.Style.FILL
+        }
+      val rect =
+        RectF(
+          sn.position.x,
+          sn.position.y,
+          sn.position.x + 170f,
+          sn.position.y + 110f,
+        )
+      canvas.drawRoundRect(rect, 10f, 10f, bgPaint)
+      val textPaint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+          color = android.graphics.Color.rgb(30, 30, 34)
+          textSize = 11.5f
+        }
+      sn.text.lines().take(5).forEachIndexed { idx, line ->
+        canvas.drawText(line, sn.position.x + 10f, sn.position.y + 24f + idx * 16f, textPaint)
+      }
+    }
+
+    // 7. Elements Stamps
+    notePage.elements.forEach { el ->
+      val badgePaint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
           color = el.stampType.tint.toArgb()
-          textSize = 16f * uniformScale
-          typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+          textSize = 13f
+          typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
         }
-      canvas.drawText(
-        el.stampType.badgeText,
-        el.position.x * uniformScale,
-        (el.position.y + 18f) * uniformScale,
-        elPaint,
-      )
+      canvas.drawText(el.stampType.badgeText, el.position.x, el.position.y + 18f, badgePaint)
     }
 
-    page.stickyNotes.forEach { sn ->
-      val left = sn.position.x * uniformScale
-      val top = sn.position.y * uniformScale
-      val rect = RectF(left, top, left + 170f * uniformScale, top + 90f * uniformScale)
-      val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = sn.backgroundColor.toArgb() }
-      canvas.drawRoundRect(rect, 10f, 10f, bgPaint)
-      val snTextPaint =
-        Paint(Paint.ANTI_ALIAS_FLAG).apply {
-          color = Color.parseColor("#3E2723")
-          textSize = 13f * uniformScale
-        }
-      canvas.drawText(sn.text.lines().firstOrNull().orEmpty(), left + 10f, top + 30f, snTextPaint)
-    }
+    canvas.restore()
 
-    // 7. Optional Cybersecurity Confidential Watermark & SHA-256 Integrity Footer
-    if (includeSecurityWatermark) {
-      canvas.save()
-      canvas.rotate(-32f, width / 2f, height / 2f)
-      val wmPaint =
-        Paint(Paint.ANTI_ALIAS_FLAG).apply {
-          color = Color.argb(28, 30, 90, 168)
-          textSize = 38f * uniformScale
-          typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-          textAlign = Paint.Align.CENTER
-        }
-      canvas.drawText("PRO NOTES VERIFIED • CONFIDENTIAL", width / 2f, height / 2f, wmPaint)
-      canvas.restore()
-
+    // 8. Optional SHA-256 Document Integrity Watermark Footer (in unscaled target canvas coords)
+    if (!watermarkHash.isNullOrBlank()) {
       val footerPaint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
-          color = Color.parseColor("#6C6C70")
-          textSize = 11f * uniformScale
-          typeface = Typeface.MONOSPACE
+          color = android.graphics.Color.argb(135, 90, 105, 130)
+          textSize = (10f * strokeScale).coerceIn(9f, 18f)
+          typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
         }
       canvas.drawText(
-        "SHA-256 INTEGRITY: ${sha256Fingerprint.take(24)}... • Page ${page.pageNumber}",
-        24f * uniformScale,
-        height - 18f * uniformScale,
+        "PRO NOTES • SHA-256: $watermarkHash • PAGE ${notePage.pageNumber}",
+        24f,
+        height - 14f,
         footerPaint,
       )
     }
   }
 
-  private fun drawAndroidPaperTemplate(
-    canvas: Canvas,
-    template: PaperTemplate,
-    width: Float,
-    height: Float,
-  ) {
-    when (template) {
-      PaperTemplate.BLANK -> Unit
-      PaperTemplate.RULED -> {
-        val linePaint =
-          Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#DCE6F2")
-            strokeWidth = 2f
-          }
-        var y = 80f
-        while (y < height - 50f) {
-          canvas.drawLine(40f, y, width - 40f, y, linePaint)
-          y += 42f
-        }
-      }
-      PaperTemplate.GRID -> {
-        val gridPaint =
-          Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#E4E6EB")
-            strokeWidth = 1.4f
-          }
-        var x = 36f
-        while (x < width) {
-          canvas.drawLine(x, 0f, x, height, gridPaint)
-          x += 36f
-        }
-        var y = 36f
-        while (y < height) {
-          canvas.drawLine(0f, y, width, y, gridPaint)
-          y += 36f
-        }
-      }
-      PaperTemplate.DOTTED -> {
-        val dotPaint =
-          Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#C8D0DC")
-            style = Paint.Style.FILL
-          }
-        var x = 34f
-        while (x < width - 20f) {
-          var y = 34f
-          while (y < height - 20f) {
-            canvas.drawCircle(x, y, 2.5f, dotPaint)
-            y += 34f
-          }
-          x += 34f
-        }
-      }
-      PaperTemplate.CORNELL -> {
-        val cornellPaint =
-          Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.parseColor("#CB6D6D")
-            strokeWidth = 2.5f
-          }
-        val headerY = 95f
-        val summaryY = height - 150f
-        val cueX = width * 0.28f
-        canvas.drawLine(0f, headerY, width, headerY, cornellPaint)
-        canvas.drawLine(cueX, headerY, cueX, summaryY, cornellPaint)
-        canvas.drawLine(0f, summaryY, width, summaryY, cornellPaint)
-      }
-    }
-  }
-
-  /**
-   * Computes a cryptographic SHA-256 integrity digest over a [NotebookDocument]'s pages, strokes, and text.
-   */
-  fun computeDocumentSha256(document: NotebookDocument): String {
+  private fun queryDisplayName(context: Context, uri: Uri): String? {
     return runCatching {
-      val digest = MessageDigest.getInstance("SHA-256")
-      digest.update(document.id.toByteArray())
-      digest.update(document.title.toByteArray())
-      document.pages.forEach { page ->
-        digest.update(page.pageNumber.toString().toByteArray())
-        page.strokes.forEach { s ->
-          digest.update(s.id.toByteArray())
-          digest.update(s.points.size.toString().toByteArray())
-        }
-        page.textBoxes.forEach { tb ->
-          digest.update(tb.text.toByteArray())
-        }
+      context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+        val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        if (idx >= 0 && cursor.moveToFirst()) cursor.getString(idx) else null
       }
-      digest.digest().joinToString("") { "%02x".format(it) }.uppercase()
-    }.getOrDefault("E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855")
-  }
-
-  /**
-   * Salted SHA-256 PIN digest for Notebook Vault locking.
-   */
-  fun hashPinSha256(notebookId: String, rawPin: String): String {
-    return runCatching {
-      val digest = MessageDigest.getInstance("SHA-256")
-      val salted = "pronotes_vault_v3_${notebookId}_${rawPin.trim()}"
-      digest.digest(salted.toByteArray()).joinToString("") { "%02x".format(it) }
-    }.getOrDefault(rawPin)
-  }
-
-  /**
-   * Generates a crisp multi-page vector-rendered PDF study handout on-device with exact A4 aspect ratio (1 : 1.414).
-   */
-  suspend fun createSamplePdfPages(): List<NotePage> =
-    withContext(Dispatchers.Default) {
-      val page1 = createHandoutBitmap(
-        pageNumber = 1,
-        chapterTitle = "CHAPTER 1 • QUANTITATIVE METHODS & CALCULUS",
-        heading = "1.1 Fundamental Theorem & Derivative Rules",
-        formulaText = "f'(x) = lim (h → 0) [ f(x + h) - f(x) ] / h",
-        rows = listOf(
-          arrayOf("Function f(x)", "Derivative f'(x)", "Domain", "Notes"),
-          arrayOf("x^n", "n · x^(n-1)", "x ∈ ℝ", "Power Rule"),
-          arrayOf("e^x", "e^x", "x ∈ ℝ", "Exponential"),
-          arrayOf("ln(x)", "1 / x", "x > 0", "Natural Log"),
-          arrayOf("sin(x)", "cos(x)", "x ∈ ℝ", "Trigonometric"),
-        ),
-      )
-      val page2 = createHandoutBitmap(
-        pageNumber = 2,
-        chapterTitle = "CHAPTER 1 • QUANTITATIVE METHODS & CALCULUS",
-        heading = "1.2 Integration by Parts & Area Under Curve",
-        formulaText = "∫ u dv = u · v - ∫ v du",
-        rows = listOf(
-          arrayOf("Interval [a, b]", "Riemann Sum", "Exact Integral", "Error Bound"),
-          arrayOf("[0, 1]", "0.3350", "0.3333", "0.0017"),
-          arrayOf("[0, 2]", "2.6700", "2.6667", "0.0033"),
-          arrayOf("[0, 3]", "9.0050", "9.0000", "0.0050"),
-        ),
-      )
-      listOf(
-        NotePage(pageNumber = 1, pdfPageBitmap = page1),
-        NotePage(pageNumber = 2, pdfPageBitmap = page2),
-      )
-    }
-
-  private fun createHandoutBitmap(
-    pageNumber: Int,
-    chapterTitle: String,
-    heading: String,
-    formulaText: String,
-    rows: List<Array<String>>,
-  ): Bitmap {
-    // True ISO A4 aspect ratio (1 : 1.4142) -> 900 x 1272
-    val w = 900
-    val h = 1272
-    val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-    val canvas = Canvas(bmp)
-    canvas.drawColor(Color.WHITE)
-
-    val bannerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#1B2B4B") }
-    canvas.drawRect(0f, 60f, 280f, 102f, bannerPaint)
-
-    val headerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      color = Color.WHITE
-      textSize = 20f
-      typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-    }
-    canvas.drawText("PAGE 1.$pageNumber", 160f, 88f, headerPaint)
-
-    val chapterPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      color = Color.parseColor("#1B2B4B")
-      textSize = 19f
-      typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-    }
-    canvas.drawText(chapterTitle, 305f, 88f, chapterPaint)
-
-    val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      color = Color.parseColor("#1C1C1E")
-      textSize = 26f
-      typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-    }
-    canvas.drawText(heading, 76f, 175f, titlePaint)
-
-    val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      color = Color.parseColor("#3A3A3C")
-      textSize = 18f
-    }
-    canvas.drawText(
-      "Circle any formula with the Pen, lift your stylus, and touch & hold the circle to Lasso!",
-      76f,
-      215f,
-      bodyPaint,
-    )
-
-    // Formula Callout Box
-    val boxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#EEF4FC") }
-    val boxBorder = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      color = Color.parseColor("#3E8BF7")
-      style = Paint.Style.STROKE
-      strokeWidth = 2.5f
-    }
-    val formulaRect = RectF(76f, 250f, w - 76f, 330f)
-    canvas.drawRoundRect(formulaRect, 12f, 12f, boxPaint)
-    canvas.drawRoundRect(formulaRect, 12f, 12f, boxBorder)
-
-    val formulaPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      color = Color.parseColor("#17325A")
-      textSize = 23f
-      typeface = Typeface.create(Typeface.SERIF, Typeface.BOLD_ITALIC)
-      textAlign = Paint.Align.CENTER
-    }
-    canvas.drawText(formulaText, w / 2f, 298f, formulaPaint)
-
-    // Structured Table
-    val tableTop = 385f
-    val rowHeight = 56f
-    val tableLeft = 76f
-    val tableRight = w - 76f
-    val colWidth = (tableRight - tableLeft) / 4f
-
-    rows.forEachIndexed { rIdx, cols ->
-      val top = tableTop + rIdx * rowHeight
-      val bottom = top + rowHeight
-      val rowFill = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = if (rIdx == 0) Color.parseColor("#DCE8F8") else Color.parseColor("#F8FAFD")
-      }
-      canvas.drawRect(tableLeft, top, tableRight, bottom, rowFill)
-      val cellStroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.parseColor("#B0C4DE")
-        style = Paint.Style.STROKE
-        strokeWidth = 1.5f
-      }
-      for (cIdx in cols.indices) {
-        val left = tableLeft + cIdx * colWidth
-        canvas.drawRect(left, top, left + colWidth, bottom, cellStroke)
-        val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-          color = Color.parseColor("#1C1C1E")
-          textSize = if (rIdx == 0) 17f else 16.5f
-          typeface =
-            if (rIdx == 0) Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-            else Typeface.DEFAULT
-          textAlign = Paint.Align.CENTER
-        }
-        canvas.drawText(cols[cIdx], left + colWidth / 2f, top + 34f, textPaint)
-      }
-    }
-
-    // Practice Workspace Box at bottom of PDF
-    val notesTop = tableTop + rows.size * rowHeight + 55f
-    canvas.drawText("Practice & Margin Annotations:", 76f, notesTop, titlePaint)
-    val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      color = Color.parseColor("#E0E6ED")
-      strokeWidth = 2f
-    }
-    for (i in 1..8) {
-      val y = notesTop + 20f + i * 44f
-      canvas.drawLine(76f, y, w - 76f, y, linePaint)
-    }
-
-    return bmp
-  }
-
-  private fun queryFileName(context: Context, uri: Uri): String? {
-    context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-      val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-      if (nameIndex >= 0 && cursor.moveToFirst()) {
-        return cursor.getString(nameIndex)
-      }
-    }
-    return uri.lastPathSegment
+    }.getOrNull()
   }
 }

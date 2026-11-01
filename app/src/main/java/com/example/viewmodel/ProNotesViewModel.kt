@@ -11,23 +11,30 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.NotebookRepository
 import com.example.data.ProNotesDatabase
 import com.example.model.ActivePopover
+import com.example.model.AppThemeMode
 import com.example.model.CanvasElementItem
 import com.example.model.CanvasImageItem
 import com.example.model.CanvasTextBox
+import com.example.model.CustomPageTemplate
 import com.example.model.DefaultCustomPalette
 import com.example.model.DefaultQuickSwatches
+import com.example.model.DocumentHistorySnapshot
+import com.example.model.DocumentType
 import com.example.model.DrawnStroke
 import com.example.model.ElementStampType
 import com.example.model.EraserMode
+import com.example.model.FolderItem
 import com.example.model.LaserMode
 import com.example.model.LassoClipboard
 import com.example.model.LassoFilterSettings
 import com.example.model.LassoShape
+import com.example.model.LibraryViewMode
 import com.example.model.NotePage
-import com.example.model.isClosedCircleLoop
 import com.example.model.NotebookCoverStyle
 import com.example.model.NotebookDocument
+import com.example.model.PageOrientation
 import com.example.model.PageScrollDirection
+import com.example.model.PageSizePreset
 import com.example.model.PaperColorTheme
 import com.example.model.PaperTemplate
 import com.example.model.PenStyle
@@ -41,6 +48,7 @@ import com.example.model.StrokePattern
 import com.example.model.StudyTapeItem
 import com.example.model.ToolbarDockPosition
 import com.example.model.WritingSubTool
+import com.example.model.isClosedCircleLoop
 import com.example.ui.theme.SwatchRoyalBlue
 import com.example.util.PdfImportHelper
 import java.text.SimpleDateFormat
@@ -63,8 +71,13 @@ import kotlinx.coroutines.launch
 
 data class ProNotesUiState(
   val screenMode: ScreenMode = ScreenMode.DOCUMENTS,
+  val appThemeMode: AppThemeMode = AppThemeMode.DARK,
   val sidebarSection: SidebarSection = SidebarSection.DOCUMENTS,
+  val libraryViewMode: LibraryViewMode = LibraryViewMode.GRID,
   val notebooks: List<NotebookDocument> = emptyList(),
+  val folders: List<FolderItem> = emptyList(),
+  val currentFolderId: String? = null,
+  val customTemplates: List<CustomPageTemplate> = emptyList(),
   val openTabIds: List<String> = emptyList(),
   val activeTabId: String = "",
   val primaryTool: PrimaryTool = PrimaryTool.WRITING_TOOLS,
@@ -126,13 +139,22 @@ data class ProNotesUiState(
   val isPlayingAudioReplay: Boolean = false,
   val recordedAudioSeconds: Int = 14,
   val isPageSidebarOpen: Boolean = false,
-  val redoStack: Map<String, List<DrawnStroke>> = emptyMap(),
+  val undoHistory: Map<String, List<DocumentHistorySnapshot>> = emptyMap(),
+  val redoHistory: Map<String, List<DocumentHistorySnapshot>> = emptyMap(),
+  val laserTrails: List<com.example.model.LaserTrailStroke> = emptyList(),
   val isReadOnlyMode: Boolean = false,
   val sortByDateAscending: Boolean = false,
+  val sortOption: com.example.model.DocumentSortOption = com.example.model.DocumentSortOption.RECENT,
   val searchQuery: String = "",
   val isSearchBarVisible: Boolean = false,
   val statusToastMessage: String? = null,
-)
+) {
+  fun canUndo(docId: String = activeTabId): Boolean =
+    undoHistory[docId]?.isNotEmpty() == true
+
+  fun canRedo(docId: String = activeTabId): Boolean =
+    redoHistory[docId]?.isNotEmpty() == true
+}
 
 private data class ComputedLassoSelection(
   val strokeIds: Set<String>,
@@ -147,13 +169,22 @@ private data class ComputedLassoSelection(
 
 class ProNotesViewModel(application: Application) : AndroidViewModel(application) {
   private val database = ProNotesDatabase.getInstance(application)
-  private val repository = NotebookRepository(database.notebookDao(), application)
+  private val repository =
+    NotebookRepository(
+      dao = database.notebookDao(),
+      context = application,
+      folderDao = database.folderDao(),
+      customTemplateDao = database.customTemplateDao(),
+    )
   private val prefs = application.getSharedPreferences("pronotes_settings_v3", Context.MODE_PRIVATE)
 
   private val _uiState = MutableStateFlow(loadInitialPreferences())
   val uiState: StateFlow<ProNotesUiState> = _uiState.asStateFlow()
 
   private var pxPerDp = 1f
+  private val deletedNotebookIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+  private val deletedFolderIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
   fun setCanvasDensity(d: Float) {
     pxPerDp = d
   }
@@ -162,45 +193,100 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     viewModelScope.launch {
       repository.allNotebooksFlow.collectLatest { savedNotebooks ->
         _uiState.update { state ->
+          // Merge in-memory revision if newer than emitted DB snapshot, and preserve any newly created
+          // in-memory notebooks whose background DB insert is still in flight
+          val unsavedInMem =
+            state.notebooks.filter { mem ->
+              !deletedNotebookIds.contains(mem.id) && savedNotebooks.none { it.id == mem.id }
+            }
+          val mergedSaved =
+            savedNotebooks
+              .filterNot { deletedNotebookIds.contains(it.id) }
+              .map { dbDoc ->
+                val inMem = state.notebooks.find { it.id == dbDoc.id }
+                if (inMem != null && inMem.revision > dbDoc.revision) inMem else dbDoc
+              }
+          val mergedNotebooks = unsavedInMem + mergedSaved
           val validTabIds =
-            state.openTabIds.filter { id -> savedNotebooks.any { it.id == id && !it.isTrashed } }
+            state.openTabIds.filter { id -> mergedNotebooks.any { it.id == id && !it.isTrashed } }
           val resolvedActiveTab =
             when {
               validTabIds.contains(state.activeTabId) -> state.activeTabId
               validTabIds.isNotEmpty() -> validTabIds.last()
-              savedNotebooks.any { !it.isTrashed } -> savedNotebooks.first { !it.isTrashed }.id
+              mergedNotebooks.any { !it.isTrashed } -> mergedNotebooks.first { !it.isTrashed }.id
               else -> ""
             }
           state.copy(
-            notebooks = savedNotebooks,
+            notebooks = mergedNotebooks,
             openTabIds = validTabIds,
             activeTabId = resolvedActiveTab,
           )
         }
       }
     }
+
+    viewModelScope.launch {
+      repository.allFoldersFlow?.collectLatest { savedFolders ->
+        _uiState.update { state ->
+          val unsavedInMem =
+            state.folders.filter { mem ->
+              !deletedFolderIds.contains(mem.id) && savedFolders.none { it.id == mem.id }
+            }
+          val mergedFolders =
+            unsavedInMem + savedFolders.filterNot { deletedFolderIds.contains(it.id) }
+          val validCurrentFolder =
+            if (
+              state.currentFolderId != null &&
+                mergedFolders.any { it.id == state.currentFolderId && !it.isTrashed }
+            ) {
+              state.currentFolderId
+            } else {
+              null
+            }
+          state.copy(
+            folders = mergedFolders,
+            currentFolderId = validCurrentFolder,
+          )
+        }
+      }
+    }
+
+    viewModelScope.launch {
+      repository.allCustomTemplatesFlow?.collectLatest { templates ->
+        _uiState.update { it.copy(customTemplates = templates) }
+      }
+    }
   }
 
   private fun loadInitialPreferences(): ProNotesUiState {
-    val dockName = prefs.getString("toolbar_dock", ToolbarDockPosition.TOP.name) ?: ToolbarDockPosition.TOP.name
-    val dockPos = runCatching { ToolbarDockPosition.valueOf(dockName) }.getOrDefault(ToolbarDockPosition.TOP)
+    val themeName = prefs.getString("app_theme_mode", AppThemeMode.DARK.name) ?: AppThemeMode.DARK.name
+    val themeMode = runCatching { AppThemeMode.valueOf(themeName) }.getOrDefault(AppThemeMode.DARK)
+    val viewModeName =
+      prefs.getString("library_view_mode", LibraryViewMode.GRID.name) ?: LibraryViewMode.GRID.name
+    val viewMode =
+      runCatching { LibraryViewMode.valueOf(viewModeName) }.getOrDefault(LibraryViewMode.GRID)
     val scrollDirName =
       prefs.getString("page_scroll_direction", PageScrollDirection.HORIZONTAL.name)
         ?: PageScrollDirection.HORIZONTAL.name
     val scrollDir =
-      runCatching { PageScrollDirection.valueOf(scrollDirName) }.getOrDefault(PageScrollDirection.HORIZONTAL)
+      runCatching { PageScrollDirection.valueOf(scrollDirName) }
+        .getOrDefault(PageScrollDirection.HORIZONTAL)
     val stylusOnly = prefs.getBoolean("only_draw_with_stylus", false)
     val circleLasso = prefs.getBoolean("circle_to_lasso", true)
     val drawHold = prefs.getBoolean("draw_and_hold", true)
     val holdErase = prefs.getBoolean("hold_to_erase", true)
     val scribbleErase = prefs.getBoolean("scribble_to_erase", true)
+    val privacyShield = prefs.getBoolean("privacy_screen_shield", false)
+    val pullAdd = prefs.getBoolean("pull_to_add_page", true)
+    val autoDeselectEraser = prefs.getBoolean("eraser_auto_deselect", false)
 
     val savedSwatchColors = prefs.getString("quick_swatches", null)
     val loadedSwatches =
       if (!savedSwatchColors.isNullOrBlank()) {
-        savedSwatchColors.split(",").mapNotNull { token ->
-          token.toIntOrNull()?.let { Color(it) }
-        }.ifEmpty { DefaultQuickSwatches }
+        savedSwatchColors
+          .split(",")
+          .mapNotNull { token -> token.toIntOrNull()?.let { Color(it) } }
+          .ifEmpty { DefaultQuickSwatches }
       } else {
         DefaultQuickSwatches
       }
@@ -208,25 +294,48 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     val savedCustomPalette = prefs.getString("custom_palette", null)
     val loadedPalette =
       if (!savedCustomPalette.isNullOrBlank()) {
-        savedCustomPalette.split(",").mapNotNull { token ->
-          token.toIntOrNull()?.let { Color(it) }
-        }.ifEmpty { DefaultCustomPalette }
+        savedCustomPalette
+          .split(",")
+          .mapNotNull { token -> token.toIntOrNull()?.let { Color(it) } }
+          .ifEmpty { DefaultCustomPalette }
       } else {
         DefaultCustomPalette
       }
 
     return ProNotesUiState(
-      toolbarDockPosition = dockPos,
+      appThemeMode = themeMode,
+      libraryViewMode = viewMode,
+      toolbarDockPosition = ToolbarDockPosition.TOP,
       pageScrollDirection = scrollDir,
       onlyDrawWithStylus = stylusOnly,
       circleToLasso = circleLasso,
       drawAndHold = drawHold,
       holdToErase = holdErase,
       scribbleToErase = scribbleErase,
+      privacyScreenShieldEnabled = privacyShield,
+      pullToAddPage = pullAdd,
+      eraserAutoDeselect = autoDeselectEraser,
       quickSwatches = loadedSwatches,
       customPalette = loadedPalette,
       selectedColor = loadedSwatches.firstOrNull() ?: SwatchRoyalBlue,
     )
+  }
+
+  fun setAppThemeMode(mode: AppThemeMode) {
+    prefs.edit().putString("app_theme_mode", mode.name).apply()
+    _uiState.update { it.copy(appThemeMode = mode) }
+  }
+
+  fun setLibraryViewMode(mode: LibraryViewMode) {
+    prefs.edit().putString("library_view_mode", mode.name).apply()
+    _uiState.update { it.copy(libraryViewMode = mode) }
+  }
+
+  fun toggleLibraryViewMode() {
+    val next =
+      if (_uiState.value.libraryViewMode == LibraryViewMode.GRID) LibraryViewMode.LIST
+      else LibraryViewMode.GRID
+    setLibraryViewMode(next)
   }
 
   private fun persistSwatchesAndPalette(swatches: List<Color>, palette: List<Color>) {
@@ -240,8 +349,19 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   private fun persistDocumentAsync(doc: NotebookDocument?) {
     if (doc == null) return
     viewModelScope.launch {
-      repository.saveNotebook(doc)
+      runCatching { repository.saveNotebook(doc) }
+        .onFailure { err ->
+          _uiState.update {
+            it.copy(statusToastMessage = "Save warning: ${err.localizedMessage ?: "Retry"}")
+          }
+        }
     }
+  }
+
+  fun flushActiveDocumentOnPause() {
+    val state = _uiState.value
+    val activeDoc = state.notebooks.find { it.id == state.activeTabId } ?: return
+    persistDocumentAsync(activeDoc)
   }
 
   private fun currentTimestamp(): String {
@@ -249,11 +369,47 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     return fmt.format(Date())
   }
 
+  /**
+   * Captures the current document's pages & page index onto the per-document undo stack
+   * and clears that document's redo stack.
+   */
+  private fun recordHistorySnapshot(
+    state: ProNotesUiState,
+    actionDescription: String = "",
+  ): Pair<Map<String, List<DocumentHistorySnapshot>>, Map<String, List<DocumentHistorySnapshot>>> {
+    val docId = state.activeTabId
+    val doc = state.notebooks.find { it.id == docId } ?: return (state.undoHistory to state.redoHistory)
+    val snap =
+      DocumentHistorySnapshot(
+        pages = doc.pages,
+        currentPageIndex = doc.currentPageIndex,
+        actionDescription = actionDescription,
+      )
+    val currentUndo = state.undoHistory[docId].orEmpty()
+    val updatedUndoList = (currentUndo + snap).takeLast(40)
+    val nextUndo = state.undoHistory.toMutableMap().apply { put(docId, updatedUndoList) }
+    val nextRedo = state.redoHistory.toMutableMap().apply { remove(docId) }
+    return nextUndo to nextRedo
+  }
+
+  /**
+   * Explicitly records an undo snapshot before a continuous gesture (such as dragging a Lasso
+   * selection, resizing/rotating a Lasso selection, or dragging a shape control handle) begins,
+   * so that the entire gesture can be undone in a single Undo step.
+   */
+  fun recordUndoSnapshotBeforeGesture(description: String = "") {
+    _uiState.update { state ->
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, description)
+      state.copy(undoHistory = nextUndo, redoHistory = nextRedo)
+    }
+  }
+
   fun clearToast() {
     _uiState.update { it.copy(statusToastMessage = null) }
   }
 
   fun switchToDocuments() {
+    flushActiveDocumentOnPause()
     _uiState.update {
       it.copy(
         screenMode = ScreenMode.DOCUMENTS,
@@ -337,7 +493,267 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   }
 
   fun selectSidebarSection(section: SidebarSection) {
-    _uiState.update { it.copy(sidebarSection = section) }
+    _uiState.update {
+      it.copy(
+        sidebarSection = section,
+        currentFolderId = if (section == SidebarSection.DOCUMENTS) it.currentFolderId else null,
+      )
+    }
+  }
+
+  // =========================================================================
+  // Folder Hierarchy & Breadcrumb Navigation (Stage 6)
+  // =========================================================================
+
+  fun navigateToFolder(folderId: String?) {
+    _uiState.update {
+      it.copy(
+        sidebarSection = SidebarSection.DOCUMENTS,
+        currentFolderId = folderId,
+      )
+    }
+  }
+
+  fun navigateUpFolder() {
+    _uiState.update { state ->
+      val currId = state.currentFolderId ?: return@update state
+      val currFolder = state.folders.find { it.id == currId }
+      state.copy(currentFolderId = currFolder?.parentFolderId)
+    }
+  }
+
+  fun getFolderBreadcrumbs(
+    folders: List<FolderItem> = _uiState.value.folders,
+    currentFolderId: String? = _uiState.value.currentFolderId,
+  ): List<FolderItem> {
+    val trail = mutableListOf<FolderItem>()
+    var cursorId = currentFolderId
+    val visited = mutableSetOf<String>()
+    while (cursorId != null && !visited.contains(cursorId)) {
+      visited.add(cursorId)
+      val folder = folders.find { it.id == cursorId } ?: break
+      trail.add(0, folder)
+      cursorId = folder.parentFolderId
+    }
+    return trail
+  }
+
+  fun createFolder(
+    name: String,
+    parentFolderId: String? = _uiState.value.currentFolderId,
+  ) {
+    val trimmed = name.trim().ifBlank { "Untitled Folder" }
+    val now = System.currentTimeMillis()
+    val folder =
+      FolderItem(
+        id = "fld_$now",
+        name = trimmed,
+        parentFolderId = parentFolderId,
+        createdAtEpochMs = now,
+        updatedAtEpochMs = now,
+        isTrashed = false,
+      )
+    _uiState.update { state ->
+      state.copy(
+        folders = (state.folders + folder).sortedBy { it.name.lowercase() },
+        statusToastMessage = "Created folder \"$trimmed\"",
+      )
+    }
+    viewModelScope.launch { repository.saveFolder(folder) }
+  }
+
+  fun renameFolder(folderId: String, newName: String) {
+    val trimmed = newName.trim()
+    if (trimmed.isEmpty()) return
+    var updatedFolder: FolderItem? = null
+    _uiState.update { state ->
+      val nextFolders =
+        state.folders.map { f ->
+          if (f.id == folderId) {
+            f.copy(name = trimmed, updatedAtEpochMs = System.currentTimeMillis()).also {
+              updatedFolder = it
+            }
+          } else f
+        }
+      state.copy(
+        folders = nextFolders,
+        statusToastMessage = "Renamed folder to \"$trimmed\"",
+      )
+    }
+    updatedFolder?.let { folder -> viewModelScope.launch { repository.saveFolder(folder) } }
+  }
+
+  /**
+   * Returns true if moving [folderId] under [targetParentId] does not create a cycle
+   * (cannot move a folder into itself or into any of its own descendants).
+   */
+  fun canMoveFolder(
+    folderId: String,
+    targetParentId: String?,
+    folders: List<FolderItem> = _uiState.value.folders,
+  ): Boolean {
+    if (folderId == targetParentId) return false
+    var cursor = targetParentId
+    val visited = mutableSetOf<String>()
+    while (cursor != null) {
+      if (cursor == folderId) return false
+      if (!visited.add(cursor)) return false
+      cursor = folders.find { it.id == cursor }?.parentFolderId
+    }
+    return true
+  }
+
+  fun moveFolder(folderId: String, targetParentId: String?) {
+    val state = _uiState.value
+    if (!canMoveFolder(folderId, targetParentId, state.folders)) {
+      _uiState.update {
+        it.copy(statusToastMessage = "Cannot move a folder inside itself")
+      }
+      return
+    }
+    var updatedFolder: FolderItem? = null
+    _uiState.update { s ->
+      val nextFolders =
+        s.folders.map { f ->
+          if (f.id == folderId) {
+            f.copy(
+                parentFolderId = targetParentId,
+                updatedAtEpochMs = System.currentTimeMillis(),
+              )
+              .also { updatedFolder = it }
+          } else f
+        }
+      s.copy(
+        folders = nextFolders,
+        statusToastMessage = "Moved folder",
+      )
+    }
+    updatedFolder?.let { folder -> viewModelScope.launch { repository.saveFolder(folder) } }
+  }
+
+  fun moveNotebookToFolder(notebookId: String, targetFolderId: String?) {
+    var updatedDoc: NotebookDocument? = null
+    _uiState.update { state ->
+      val targetFolderName =
+        if (targetFolderId == null) "Documents Root"
+        else state.folders.find { it.id == targetFolderId }?.name ?: "Folder"
+      val nextNotebooks =
+        state.notebooks.map { nb ->
+          if (nb.id == notebookId) {
+            nb.copy(
+                folderId = targetFolderId,
+                revision = nb.revision + 1L,
+                updatedAtEpochMs = System.currentTimeMillis(),
+              )
+              .also { updatedDoc = it }
+          } else nb
+        }
+      state.copy(
+        notebooks = nextNotebooks,
+        statusToastMessage = "Moved to \"$targetFolderName\"",
+      )
+    }
+    persistDocumentAsync(updatedDoc)
+  }
+
+  fun moveFolderToTrash(folderId: String) {
+    var updatedFolder: FolderItem? = null
+    _uiState.update { state ->
+      val nextFolders =
+        state.folders.map { f ->
+          if (f.id == folderId) {
+            f.copy(isTrashed = !f.isTrashed, updatedAtEpochMs = System.currentTimeMillis()).also {
+              updatedFolder = it
+            }
+          } else f
+        }
+      state.copy(
+        folders = nextFolders,
+        currentFolderId = if (state.currentFolderId == folderId) null else state.currentFolderId,
+        statusToastMessage =
+          if (updatedFolder?.isTrashed == true) "Folder moved to Trash" else "Folder restored",
+      )
+    }
+    updatedFolder?.let { folder -> viewModelScope.launch { repository.saveFolder(folder) } }
+  }
+
+  fun deleteFolderPermanently(folderId: String) {
+    deletedFolderIds.add(folderId)
+    _uiState.update { state ->
+      state.copy(
+        folders = state.folders.filterNot { it.id == folderId },
+        currentFolderId = if (state.currentFolderId == folderId) null else state.currentFolderId,
+        statusToastMessage = "Deleted folder permanently",
+      )
+    }
+    viewModelScope.launch { repository.deleteFolder(folderId) }
+  }
+
+  fun renameNotebook(notebookId: String, newTitle: String) {
+    val trimmed = newTitle.trim()
+    if (trimmed.isEmpty()) return
+    var updatedDoc: NotebookDocument? = null
+    _uiState.update { state ->
+      val nextList =
+        state.notebooks.map { nb ->
+          if (nb.id == notebookId) {
+            nb.copy(
+                title = trimmed,
+                timestamp = currentTimestamp(),
+                revision = nb.revision + 1L,
+                updatedAtEpochMs = System.currentTimeMillis(),
+              )
+              .also { updatedDoc = it }
+          } else nb
+        }
+      state.copy(
+        notebooks = nextList,
+        statusToastMessage = "Renamed to \"$trimmed\"",
+      )
+    }
+    persistDocumentAsync(updatedDoc)
+  }
+
+  // =========================================================================
+  // Custom Templates Import & Management (Stage 6)
+  // =========================================================================
+
+  fun importCustomTemplate(name: String, bitmap: Bitmap) {
+    val now = System.currentTimeMillis()
+    val id = "ctpl_$now"
+    val key = "custom_tpl_$now"
+    val isLandscape = bitmap.width > bitmap.height
+    val template =
+      CustomPageTemplate(
+        id = id,
+        name = name.trim().ifBlank { "Custom Template" },
+        bitmapKey = key,
+        previewBitmap = bitmap,
+        isLandscape = isLandscape,
+        createdAtEpochMs = now,
+      )
+    viewModelScope.launch {
+      val saved = repository.saveCustomTemplate(template, bitmap)
+      _uiState.update { state ->
+        state.copy(
+          customTemplates = listOf(saved) + state.customTemplates.filterNot { it.id == saved.id },
+          statusToastMessage = "Saved custom template \"${saved.name}\"",
+        )
+      }
+    }
+  }
+
+  fun deleteCustomTemplate(templateId: String) {
+    val target = _uiState.value.customTemplates.find { it.id == templateId } ?: return
+    _uiState.update { state ->
+      state.copy(
+        customTemplates = state.customTemplates.filterNot { it.id == templateId },
+        statusToastMessage = "Removed custom template \"${target.name}\"",
+      )
+    }
+    viewModelScope.launch {
+      repository.deleteCustomTemplate(target.id, target.bitmapKey)
+    }
   }
 
   fun toggleSearchBar() {
@@ -359,7 +775,12 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       val updatedList =
         state.notebooks.map { nb ->
           if (nb.id == notebookId) {
-            nb.copy(isFavorite = !nb.isFavorite).also { updatedDoc = it }
+            nb.copy(
+                isFavorite = !nb.isFavorite,
+                revision = nb.revision + 1L,
+                updatedAtEpochMs = System.currentTimeMillis(),
+              )
+              .also { updatedDoc = it }
           } else nb
         }
       state.copy(notebooks = updatedList)
@@ -373,30 +794,51 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       val updatedList =
         state.notebooks.map { nb ->
           if (nb.id == notebookId) {
-            nb.copy(isTrashed = !nb.isTrashed).also { updatedDoc = it }
+            nb.copy(
+                isTrashed = !nb.isTrashed,
+                revision = nb.revision + 1L,
+                updatedAtEpochMs = System.currentTimeMillis(),
+              )
+              .also { updatedDoc = it }
           } else nb
         }
       val remainingTabs = state.openTabIds.filterNot { it == notebookId }
       state.copy(
         notebooks = updatedList,
         openTabIds = remainingTabs,
-        statusToastMessage = if (updatedDoc?.isTrashed == true) "Moved to Trash" else "Restored from Trash",
+        statusToastMessage =
+          if (updatedDoc?.isTrashed == true) "Moved to Trash" else "Restored from Trash",
       )
     }
     persistDocumentAsync(updatedDoc)
   }
 
   fun deleteNotebookPermanently(notebookId: String) {
+    deletedNotebookIds.add(notebookId)
+    _uiState.update { state ->
+      state.copy(
+        notebooks = state.notebooks.filterNot { it.id == notebookId },
+        openTabIds = state.openTabIds.filterNot { it == notebookId },
+        statusToastMessage = "Deleted notebook permanently",
+      )
+    }
     viewModelScope.launch {
       repository.deleteNotebook(notebookId)
-      _uiState.update { it.copy(statusToastMessage = "Deleted notebook permanently") }
     }
   }
 
   fun emptyTrash() {
+    _uiState.value.notebooks.filter { it.isTrashed }.forEach { deletedNotebookIds.add(it.id) }
+    _uiState.value.folders.filter { it.isTrashed }.forEach { deletedFolderIds.add(it.id) }
+    _uiState.update { state ->
+      state.copy(
+        notebooks = state.notebooks.filterNot { it.isTrashed },
+        folders = state.folders.filterNot { it.isTrashed },
+        statusToastMessage = "Trash emptied",
+      )
+    }
     viewModelScope.launch {
       repository.emptyTrash()
-      _uiState.update { it.copy(statusToastMessage = "Trash emptied") }
     }
   }
 
@@ -406,8 +848,12 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       _uiState.update {
         it.copy(
           notebooks = emptyList(),
+          folders = emptyList(),
+          currentFolderId = null,
           openTabIds = emptyList(),
           activeTabId = "",
+          undoHistory = emptyMap(),
+          redoHistory = emptyMap(),
           screenMode = ScreenMode.DOCUMENTS,
           statusToastMessage = "All local notes cleared from device",
         )
@@ -419,20 +865,39 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     title: String = "",
     coverStyle: NotebookCoverStyle = NotebookCoverStyle.KRAFT_TAN,
     paperTemplate: PaperTemplate = PaperTemplate.BLANK,
+    paperColorTheme: PaperColorTheme = PaperColorTheme.PURE_WHITE,
+    documentType: DocumentType =
+      if (coverStyle == NotebookCoverStyle.WHITEBOARD) DocumentType.WHITEBOARD
+      else DocumentType.NOTEBOOK,
+    pageSizePreset: PageSizePreset = PageSizePreset.A4,
+    pageOrientation: PageOrientation =
+      if (coverStyle == NotebookCoverStyle.WHITEBOARD) PageOrientation.LANDSCAPE
+      else PageOrientation.PORTRAIT,
+    customTemplate: CustomPageTemplate? = null,
+    folderId: String? = _uiState.value.currentFolderId,
     openImmediately: Boolean = true,
   ) {
     var createdDoc: NotebookDocument? = null
     _uiState.update { state ->
       val count = state.notebooks.size + 1
-      val newId = "nb_${System.currentTimeMillis()}"
+      val now = System.currentTimeMillis()
+      val newId = "nb_$now"
       val resolvedTitle =
-        title.ifBlank {
-          if (coverStyle == NotebookCoverStyle.WHITEBOARD) {
+        title.trim().ifBlank {
+          if (documentType == DocumentType.WHITEBOARD || coverStyle == NotebookCoverStyle.WHITEBOARD) {
             "Untitled Whiteboard ($count)"
           } else {
             "Untitled Notebook ($count)"
           }
         }
+      val firstPage =
+        NotePage(
+          pageNumber = 1,
+          pageTemplate = paperTemplate,
+          pageColorTheme = paperColorTheme,
+          customTemplateBitmap = customTemplate?.previewBitmap,
+          customTemplateKey = customTemplate?.bitmapKey ?: "",
+        )
       val newDoc =
         NotebookDocument(
           id = newId,
@@ -442,7 +907,15 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           isFavorite = false,
           hasStylusBadge = state.onlyDrawWithStylus,
           paperTemplate = paperTemplate,
-          pages = listOf(NotePage(pageNumber = 1)),
+          paperColorTheme = paperColorTheme,
+          pages = listOf(firstPage),
+          folderId = folderId,
+          documentType = documentType,
+          pageSizePreset = pageSizePreset,
+          pageOrientation = pageOrientation,
+          customTemplateKey = customTemplate?.bitmapKey ?: "",
+          revision = 1L,
+          updatedAtEpochMs = now,
         )
       createdDoc = newDoc
       val updatedTabs =
@@ -453,28 +926,50 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         activeTabId = if (openImmediately) newId else state.activeTabId,
         screenMode = if (openImmediately) ScreenMode.EDITOR else state.screenMode,
         activePopover = ActivePopover.NONE,
-        statusToastMessage = "Saved \"$resolvedTitle\" to device",
+        statusToastMessage = "Created \"$resolvedTitle\"",
       )
     }
     persistDocumentAsync(createdDoc)
+  }
+
+  fun createNewWhiteboard(
+    title: String = "",
+    folderId: String? = _uiState.value.currentFolderId,
+  ) {
+    createNewNotebook(
+      title = title,
+      coverStyle = NotebookCoverStyle.WHITEBOARD,
+      paperTemplate = PaperTemplate.DOTTED,
+      paperColorTheme = PaperColorTheme.PURE_WHITE,
+      documentType = DocumentType.WHITEBOARD,
+      pageSizePreset = PageSizePreset.GOODNOTES_STANDARD,
+      pageOrientation = PageOrientation.LANDSCAPE,
+      folderId = folderId,
+      openImmediately = true,
+    )
   }
 
   fun importPdfDocument(title: String, pages: List<NotePage>) {
     if (pages.isEmpty()) return
     var createdDoc: NotebookDocument? = null
     _uiState.update { state ->
-      val newId = "pdf_${System.currentTimeMillis()}"
+      val now = System.currentTimeMillis()
+      val newId = "pdf_$now"
       val newDoc =
         NotebookDocument(
           id = newId,
           title = title,
           timestamp = currentTimestamp(),
           coverStyle = NotebookCoverStyle.WHITE_DOCUMENT,
-          isFavorite = true,
+          isFavorite = false,
           isImportedPdf = true,
           paperTemplate = PaperTemplate.BLANK,
           pages = pages,
           currentPageIndex = 0,
+          folderId = state.currentFolderId,
+          documentType = DocumentType.NOTEBOOK,
+          revision = 1L,
+          updatedAtEpochMs = now,
         )
       createdDoc = newDoc
       state.copy(
@@ -487,6 +982,25 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       )
     }
     persistDocumentAsync(createdDoc)
+  }
+
+  fun updateCurrentPageCanvasSize(widthPx: Float, heightPx: Float) {
+    if (widthPx <= 10f || heightPx <= 10f) return
+    _uiState.update { state ->
+      val doc = state.notebooks.find { it.id == state.activeTabId } ?: return@update state
+      val currPage = doc.currentPage
+      if (
+        abs(currPage.canvasWidthPx - widthPx) < 2f &&
+          abs(currPage.canvasHeightPx - heightPx) < 2f
+      ) {
+        return@update state
+      }
+      val (updated, _) =
+        updateCurrentPage(state, bumpRevision = false) { page ->
+          page.copy(canvasWidthPx = widthPx, canvasHeightPx = heightPx)
+        }
+      state.copy(notebooks = updated)
+    }
   }
 
   fun selectPrimaryTool(tool: PrimaryTool) {
@@ -571,23 +1085,14 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   }
 
   fun setToolbarDockPosition(position: ToolbarDockPosition) {
-    prefs.edit().putString("toolbar_dock", position.name).apply()
+    prefs.edit().putString("toolbar_dock", ToolbarDockPosition.TOP.name).apply()
     _uiState.update {
-      it.copy(
-        toolbarDockPosition = position,
-        statusToastMessage = "Toolbar docked to ${position.label} (Long-press toolbar to reposition)",
-      )
+      it.copy(toolbarDockPosition = ToolbarDockPosition.TOP)
     }
   }
 
-  /**
-   * Cycles the toolbar dock position across TOP -> RIGHT -> BOTTOM -> LEFT when long-pressed!
-   */
   fun cycleToolbarDockPosition() {
-    val entries = ToolbarDockPosition.entries
-    val current = _uiState.value.toolbarDockPosition
-    val next = entries[(entries.indexOf(current) + 1) % entries.size]
-    setToolbarDockPosition(next)
+    setToolbarDockPosition(ToolbarDockPosition.TOP)
   }
 
   fun toggleSPenBarrelButtonMode() {
@@ -596,8 +1101,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       state.copy(
         isSPenBarrelButtonActive = next,
         statusToastMessage =
-          if (next) "S Pen Side Button HELD → Instant Precision/Stroke Eraser Active"
-          else "S Pen Side Button Released → Returned to ${state.primaryTool.label}",
+          if (next) "S Pen Barrel Button Active → Instant Eraser"
+          else "S Pen Barrel Button Released → ${state.primaryTool.label}",
       )
     }
   }
@@ -608,8 +1113,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       it.copy(
         privacyScreenShieldEnabled = enabled,
         statusToastMessage =
-          if (enabled) "Cybersecurity Screen Shield ON (FLAG_SECURE blocks screenshots & screen capture)"
-          else "Cybersecurity Screen Shield OFF",
+          if (enabled) "Privacy Screen Shield ON (blocks screenshots & recording)"
+          else "Privacy Screen Shield OFF",
       )
     }
   }
@@ -619,8 +1124,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       it.copy(
         watermarkConfidentialExports = enabled,
         statusToastMessage =
-          if (enabled) "PDF Export SHA-256 Watermark Enabled"
-          else "PDF Export Watermark Disabled",
+          if (enabled) "PDF Export Watermark Enabled" else "PDF Export Watermark Disabled",
       )
     }
   }
@@ -638,14 +1142,20 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       val updatedList =
         state.notebooks.map { nb ->
           if (nb.id == docId) {
-            nb.copy(isLockedVault = true, vaultPinHash = pinHash).also { savedDoc = it }
+            nb.copy(
+                isLockedVault = true,
+                vaultPinHash = pinHash,
+                revision = nb.revision + 1L,
+                updatedAtEpochMs = System.currentTimeMillis(),
+              )
+              .also { savedDoc = it }
           } else nb
         }
       state.copy(
         notebooks = updatedList,
         unlockedVaultNotebookIds = state.unlockedVaultNotebookIds + docId,
         activePopover = ActivePopover.NONE,
-        statusToastMessage = "Locked notebook with SHA-256 Vault PIN",
+        statusToastMessage = "Locked notebook with AES-GCM Vault encryption",
       )
     }
     persistDocumentAsync(savedDoc)
@@ -658,7 +1168,13 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       val updatedList =
         state.notebooks.map { nb ->
           if (nb.id == docId) {
-            nb.copy(isLockedVault = false, vaultPinHash = "").also { savedDoc = it }
+            nb.copy(
+                isLockedVault = false,
+                vaultPinHash = "",
+                revision = nb.revision + 1L,
+                updatedAtEpochMs = System.currentTimeMillis(),
+              )
+              .also { savedDoc = it }
           } else nb
         }
       state.copy(
@@ -685,7 +1201,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           screenMode = ScreenMode.EDITOR,
           openTabIds = updatedTabs,
           activeTabId = notebookId,
-          statusToastMessage = "Vault Unlocked • SHA-256 Verified",
+          statusToastMessage = "Vault Unlocked",
         )
       } else {
         state.copy(statusToastMessage = "Incorrect Vault PIN — Access Denied")
@@ -718,20 +1234,11 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   }
 
   fun moveSubToolbar(delta: Offset) {
-    _uiState.update { state ->
-      val nextX = (state.subToolbarOffset.x + delta.x).coerceIn(-260f, 260f)
-      val nextY = (state.subToolbarOffset.y + delta.y).coerceIn(-40f, 520f)
-      state.copy(subToolbarOffset = Offset(nextX, nextY))
-    }
+    // Sub-toolbar is now cleanly docked below the primary toolbar (Stage 4)
   }
 
   fun resetSubToolbarPosition() {
-    _uiState.update {
-      it.copy(
-        subToolbarOffset = Offset.Zero,
-        statusToastMessage = "Reset floating toolbar position",
-      )
-    }
+    _uiState.update { it.copy(subToolbarOffset = Offset.Zero) }
   }
 
   fun toggleOnlyDrawWithStylus(enabled: Boolean) {
@@ -740,8 +1247,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       it.copy(
         onlyDrawWithStylus = enabled,
         statusToastMessage =
-          if (enabled) "Stylus-Only ON: Stylus draws, Finger swipes turn pages & pinch zooms"
-          else "Stylus+Touch ON: Stylus & 1 finger draw, 2 fingers swipe pages & zoom",
+          if (enabled) "Stylus-Only ON: Stylus draws, Finger swipes & pinch-zooms"
+          else "Stylus+Touch ON: Stylus & 1 finger draw, 2 fingers swipe & zoom",
       )
     }
   }
@@ -755,6 +1262,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   }
 
   fun togglePullToAddPage(enabled: Boolean) {
+    prefs.edit().putBoolean("pull_to_add_page", enabled).apply()
     _uiState.update { it.copy(pullToAddPage = enabled) }
   }
 
@@ -796,8 +1304,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       it.copy(
         highlighterStraightLine = next,
         statusToastMessage =
-          if (next) "Highlighter: Draw in Straight Line ON"
-          else "Highlighter: Freehand mode (Hold at end to snap straight)",
+          if (next) "Highlighter: Straight Line Mode ON"
+          else "Highlighter: Freehand Mode",
       )
     }
   }
@@ -811,6 +1319,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   }
 
   fun toggleEraserAutoDeselect(enabled: Boolean) {
+    prefs.edit().putBoolean("eraser_auto_deselect", enabled).apply()
     _uiState.update { it.copy(eraserAutoDeselect = enabled) }
   }
 
@@ -819,8 +1328,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   }
 
   /**
-   * Inserts a clean geometric shape stamp onto the current page if the user taps a shape badge
-   * inside the Shapes popover (while freehand drawing in the Shapes tool always auto-decides!).
+   * Inserts a geometric shape stamp onto the current page when selected from the Shapes popover.
    */
   fun insertQuickShape(kind: ShapeKind) {
     val pts =
@@ -837,6 +1345,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       }
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Insert ${kind.label}")
       val (geomPoints, handles) = buildGeometricShapeWithHandles(pts, kind)
       val baseWidth = state.thicknessPresets.getOrElse(state.selectedThicknessIndex) { 6.5f }
       val strokeId = java.util.UUID.randomUUID().toString()
@@ -865,11 +1374,13 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       savedDoc = modifiedDoc
       state.copy(
         notebooks = updated,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
         selectedShapeKind = kind,
         lastAutoDetectedShape = kind,
         activeShapeEditStrokeId = strokeId,
         activePopover = ActivePopover.NONE,
-        statusToastMessage = "Inserted ${kind.label} (drag blue handles to adjust)",
+        statusToastMessage = "Inserted ${kind.label}",
       )
     }
     persistDocumentAsync(savedDoc)
@@ -948,6 +1459,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       persistSwatchesAndPalette(updatedSwatches, state.customPalette)
 
       if (state.primaryTool == PrimaryTool.LASSO && state.showLassoSelection) {
+        val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Recolor selection")
         val selectedStrokeIds = state.lassoSelectedStrokeIds
         val selectedTextIds = state.lassoSelectedTextBoxIds
         val (updatedNotebooks, modifiedDoc) =
@@ -970,6 +1482,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         savedDoc = modifiedDoc
         state.copy(
           notebooks = updatedNotebooks,
+          undoHistory = nextUndo,
+          redoHistory = nextRedo,
           selectedColor = color,
           quickSwatches = updatedSwatches,
           activePopover = ActivePopover.NONE,
@@ -987,9 +1501,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     persistDocumentAsync(savedDoc)
   }
 
-  /**
-   * Adds a new color slot directly to the floating toolbar swatches AND custom palette.
-   */
   fun addNewColorToToolbar(color: Color) {
     _uiState.update { state ->
       val updatedPalette =
@@ -1005,14 +1516,11 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         quickSwatches = updatedSwatches,
         selectedSwatchIndex = newIdx,
         selectedColor = color,
-        statusToastMessage = "Added new color slot #${newIdx + 1} to toolbar",
+        statusToastMessage = "Added color slot #${newIdx + 1}",
       )
     }
   }
 
-  /**
-   * Adds a custom color to the saved palette grid.
-   */
   fun addCustomColorToPalette(color: Color) {
     _uiState.update { state ->
       val updatedPalette =
@@ -1027,13 +1535,12 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     }
   }
 
-  /**
-   * Removes the active color slot from the toolbar (maintaining at least 2 slots).
-   */
   fun removeCurrentToolbarSwatchSlot() {
     _uiState.update { state ->
       if (state.quickSwatches.size <= 2) {
-        return@update state.copy(statusToastMessage = "At least 2 color slots must remain in toolbar")
+        return@update state.copy(
+          statusToastMessage = "At least 2 color slots must remain in toolbar"
+        )
       }
       val removeIdx = state.selectedSwatchIndex.coerceIn(0, state.quickSwatches.lastIndex)
       val updatedSwatches = state.quickSwatches.filterIndexed { idx, _ -> idx != removeIdx }
@@ -1086,10 +1593,12 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
 
   private fun updateCurrentPage(
     state: ProNotesUiState,
+    bumpRevision: Boolean = true,
     transform: (NotePage) -> NotePage,
   ): Pair<List<NotebookDocument>, NotebookDocument?> {
     val docId = state.activeTabId
     var modifiedDoc: NotebookDocument? = null
+    val now = System.currentTimeMillis()
     val list =
       state.notebooks.map { nb ->
         if (nb.id != docId) nb
@@ -1097,16 +1606,18 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           val idx = nb.currentPageIndex.coerceIn(0, (nb.pages.size - 1).coerceAtLeast(0))
           val updatedPages = nb.pages.toMutableList()
           updatedPages[idx] = transform(updatedPages[idx])
-          nb.copy(pages = updatedPages, timestamp = currentTimestamp()).also { modifiedDoc = it }
+          nb.copy(
+              pages = updatedPages,
+              timestamp = if (bumpRevision) currentTimestamp() else nb.timestamp,
+              revision = if (bumpRevision) nb.revision + 1L else nb.revision,
+              updatedAtEpochMs = if (bumpRevision) now else nb.updatedAtEpochMs,
+            )
+            .also { modifiedDoc = it }
         }
       }
     return list to modifiedDoc
   }
 
-  /**
-   * Accurate segment-based & bounding-box hit test so the Eraser reliably erases
-   * straight lines, arrows, rectangles, circles, triangles, polygons, stars, and freehand strokes!
-   */
   private fun isStrokeHitByPoint(stroke: DrawnStroke, target: Offset, radius: Float): Boolean {
     val effectiveRadius = radius + (stroke.strokeWidth * 0.5f)
     if (stroke.points.isEmpty()) return false
@@ -1164,8 +1675,12 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
       if (state.isReadOnlyMode) return@update state
+      val currentDoc = state.notebooks.find { it.id == state.activeTabId } ?: return@update state
+      val beforePage = currentDoc.currentPage
       val mode = state.eraserMode
       val hitRadius = state.eraserRadius
+
+      var pageChanged = false
       val (updatedNotebooks, modifiedDoc) =
         updateCurrentPage(state) { page ->
           val nextStrokes =
@@ -1190,6 +1705,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
                   if (!hitsAny) {
                     listOf(stroke)
                   } else {
+                    pageChanged = true
                     val segments = mutableListOf<List<Offset>>()
                     var currentSegment = mutableListOf<Offset>()
                     for (pt in densePts) {
@@ -1211,6 +1727,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
                       stroke.copy(
                         id = java.util.UUID.randomUUID().toString(),
                         points = segPts,
+                        pressures = emptyList(),
                         isShape = false,
                         shapeKind = null,
                         shapeFill = false,
@@ -1233,22 +1750,40 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
             } else {
               page.studyTapes.filterNot { tape ->
                 points.any { erasePt ->
-                  distanceFromPointToSegment(erasePt, tape.start, tape.end) <= (hitRadius + tape.thickness / 2f)
+                  distanceFromPointToSegment(erasePt, tape.start, tape.end) <=
+                    (hitRadius + tape.thickness / 2f)
                 }
               }
             }
+          if (
+            nextStrokes.size != beforePage.strokes.size ||
+              nextTapes.size != beforePage.studyTapes.size
+          ) {
+            pageChanged = true
+          }
           page.copy(strokes = nextStrokes, studyTapes = nextTapes)
         }
+
+      if (!pageChanged) {
+        return@update state
+      }
       savedDoc = modifiedDoc
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Erase")
 
       val nextTool =
-        if (!forceTemporaryEraser && state.primaryTool == PrimaryTool.ERASER && state.eraserAutoDeselect) {
+        if (
+          !forceTemporaryEraser &&
+            state.primaryTool == PrimaryTool.ERASER &&
+            state.eraserAutoDeselect
+        ) {
           PrimaryTool.WRITING_TOOLS
         } else {
           state.primaryTool
         }
       state.copy(
         notebooks = updatedNotebooks,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
         primaryTool = nextTool,
         activeShapeEditStrokeId = null,
       )
@@ -1256,10 +1791,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     persistDocumentAsync(savedDoc)
   }
 
-  /**
-   * Computes the exact IDs of all strokes, shapes, text boxes, elements, sticky notes, and images
-   * enclosed by [loopPoints] on [page], respecting [filters].
-   */
   private fun computeLassoSelection(
     loopPoints: List<Offset>,
     page: NotePage?,
@@ -1315,7 +1846,9 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         page.images
           .filter { img ->
             shape.contains(img.position) ||
-              shape.contains(img.position + Offset(img.widthDp * pxPerDp * 0.5f, img.heightDp * pxPerDp * 0.5f))
+              shape.contains(
+                img.position + Offset(img.widthDp * pxPerDp * 0.5f, img.heightDp * pxPerDp * 0.5f)
+              )
           }
           .map { it.id }
           .toSet()
@@ -1335,15 +1868,20 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     if (!state.circleToLasso || state.isReadOnlyMode) return false
     val isPenOrPencil =
       state.primaryTool == PrimaryTool.WRITING_TOOLS &&
-        (state.activeWritingSubTool == WritingSubTool.PEN || state.activeWritingSubTool == WritingSubTool.PENCIL)
+        (state.activeWritingSubTool == WritingSubTool.PEN ||
+          state.activeWritingSubTool == WritingSubTool.PENCIL)
     if (!isPenOrPencil) return false
     val page = state.notebooks.find { it.id == state.activeTabId }?.currentPage ?: return false
 
-    // Must be the stroke that was JUST drawn, not any old circle on the page
     val circle = page.strokes.maxByOrNull { it.timestampMs } ?: return false
     if (System.currentTimeMillis() - circle.timestampMs > 4000L) return false
     if (circle.isHighlighter || circle.isShape || !isClosedCircleLoop(circle.points)) return false
-    if (!LassoShape(circle.points).contains(holdPoint) && !isStrokeHitByPoint(circle, holdPoint, 48f)) return false
+    if (
+      !LassoShape(circle.points).contains(holdPoint) &&
+        !isStrokeHitByPoint(circle, holdPoint, 48f)
+    ) {
+      return false
+    }
 
     val remaining = page.copy(strokes = page.strokes.filterNot { it.id == circle.id })
     val selection = computeLassoSelection(circle.points, remaining, state.lassoFilters)
@@ -1351,7 +1889,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
 
     var savedDoc: NotebookDocument? = null
     _uiState.update { s ->
-      val (nbs, doc) = updateCurrentPage(s) { p -> p.copy(strokes = p.strokes.filterNot { it.id == circle.id }) }
+      val (nbs, doc) =
+        updateCurrentPage(s) { p -> p.copy(strokes = p.strokes.filterNot { it.id == circle.id }) }
       savedDoc = doc
       s.copy(
         notebooks = nbs,
@@ -1364,7 +1903,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         lassoSelectedElementIds = selection.elementIds,
         lassoSelectedStickyIds = selection.stickyIds,
         lassoSelectedImageIds = selection.imageIds,
-        statusToastMessage = "${selection.totalCount} item${if (selection.totalCount == 1) "" else "s"} selected",
+        statusToastMessage =
+          "${selection.totalCount} item${if (selection.totalCount == 1) "" else "s"} selected",
       )
     }
     persistDocumentAsync(savedDoc)
@@ -1388,15 +1928,13 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         lassoSelectedElementIds = selection.elementIds,
         lassoSelectedStickyIds = selection.stickyIds,
         lassoSelectedImageIds = selection.imageIds,
-        statusToastMessage = "${selection.totalCount} item${if (selection.totalCount == 1) "" else "s"} selected",
+        statusToastMessage =
+          "${selection.totalCount} item${if (selection.totalCount == 1) "" else "s"} selected",
       )
     }
     return true
   }
 
-  /**
-   * Moves all items enclosed by the active Lasso selection in real time when the user drags inside the Lasso!
-   */
   fun moveLassoSelection(delta: Offset) {
     if (delta == Offset.Zero) return
     _uiState.update { state ->
@@ -1450,15 +1988,11 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       state.copy(
         isLassoResizeMode = next,
         statusToastMessage =
-          if (next) "Resize/Rotate Mode: Drag bottom-right blue handle to scale & rotate"
-          else null,
+          if (next) "Resize/Rotate Mode: Drag bottom-right handle to scale & rotate" else null,
       )
     }
   }
 
-  /**
-   * Scales and rotates all Lasso-selected items around the selection centroid in real time!
-   */
   fun transformLassoSelection(scaleFactor: Float, rotationDeltaDegrees: Float) {
     val clampedScale = scaleFactor.coerceIn(0.85f, 1.18f)
     val rad = Math.toRadians(rotationDeltaDegrees.toDouble())
@@ -1542,7 +2076,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     persistDocumentAsync(s.notebooks.find { it.id == s.activeTabId })
   }
 
-  /** Clears the selection but stays in the Lasso tool (tap outside). */
   fun clearLassoSelection() {
     _uiState.update {
       it.copy(
@@ -1569,6 +2102,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       val selectedStrokes = state.lassoSelectedStrokeIds
       val selectedTexts = state.lassoSelectedTextBoxIds
       if (selectedStrokes.isEmpty() && selectedTexts.isEmpty()) return@update state
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Recolor selection")
 
       val (updatedNotebooks, modifiedDoc) =
         updateCurrentPage(state) { page ->
@@ -1590,6 +2124,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       savedDoc = modifiedDoc
       state.copy(
         notebooks = updatedNotebooks,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
         selectedColor = color,
         isLassoColorMenuOpen = false,
         statusToastMessage = "Recolored selection",
@@ -1599,6 +2135,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   }
 
   fun scaleLassoSelectionStep(scaleUp: Boolean) {
+    recordUndoSnapshotBeforeGesture("Scale selection")
     val factor = if (scaleUp) 1.20f else 0.83f
     transformLassoSelection(scaleFactor = factor, rotationDeltaDegrees = 0f)
     commitLassoChanges()
@@ -1619,8 +2156,12 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     val total = strokes.size + texts.size + elements.size + stickies.size + images.size
     if (total == 0) return
 
-    val cx = if (state.lassoLoopPoints.isNotEmpty()) state.lassoLoopPoints.map { it.x }.average().toFloat() else 0f
-    val cy = if (state.lassoLoopPoints.isNotEmpty()) state.lassoLoopPoints.map { it.y }.average().toFloat() else 0f
+    val cx =
+      if (state.lassoLoopPoints.isNotEmpty()) state.lassoLoopPoints.map { it.x }.average().toFloat()
+      else 0f
+    val cy =
+      if (state.lassoLoopPoints.isNotEmpty()) state.lassoLoopPoints.map { it.y }.average().toFloat()
+      else 0f
 
     val clipboard =
       LassoClipboard(
@@ -1649,9 +2190,17 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   fun pasteLassoClipboard(targetPosition: Offset? = null) {
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
-      val clipboard = state.lassoClipboard ?: return@update state.copy(statusToastMessage = "Clipboard is empty")
-      val total = clipboard.strokes.size + clipboard.textBoxes.size + clipboard.elements.size + clipboard.stickyNotes.size + clipboard.images.size
+      val clipboard =
+        state.lassoClipboard ?: return@update state.copy(statusToastMessage = "Clipboard is empty")
+      val total =
+        clipboard.strokes.size +
+          clipboard.textBoxes.size +
+          clipboard.elements.size +
+          clipboard.stickyNotes.size +
+          clipboard.images.size
       if (total == 0) return@update state.copy(statusToastMessage = "Clipboard is empty")
+
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Paste")
 
       val shift =
         if (targetPosition != null && clipboard.originalCentroid != Offset.Zero) {
@@ -1763,6 +2312,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
 
       state.copy(
         notebooks = updatedNotebooks,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
         primaryTool = PrimaryTool.LASSO,
         showLassoSelection = true,
         isLassoResizeMode = false,
@@ -1791,7 +2342,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         lassoSelectedElementIds = emptySet(),
         lassoSelectedStickyIds = emptySet(),
         lassoSelectedImageIds = emptySet(),
-        primaryTool = if (it.primaryTool == PrimaryTool.LASSO) PrimaryTool.WRITING_TOOLS else it.primaryTool,
+        primaryTool =
+          if (it.primaryTool == PrimaryTool.LASSO) PrimaryTool.WRITING_TOOLS else it.primaryTool,
       )
     }
   }
@@ -1812,9 +2364,12 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         return@update state
       }
 
-      // Direct Lasso Tool: compute exact enclosed items inside the drawn lasso loop
       if (state.primaryTool == PrimaryTool.LASSO) {
-        val diag = hypot(points.maxOf { it.x } - points.minOf { it.x }, points.maxOf { it.y } - points.minOf { it.y })
+        val diag =
+          hypot(
+            points.maxOf { it.x } - points.minOf { it.x },
+            points.maxOf { it.y } - points.minOf { it.y },
+          )
         if (diag < 24f) {
           return@update state.copy(
             showLassoSelection = false,
@@ -1839,7 +2394,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           lassoSelectedImageIds = selection.imageIds,
           statusToastMessage =
             if (selection.totalCount > 0) {
-              "Selected ${selection.totalCount} item${if (selection.totalCount == 1) "" else "s"} — drag inside lasso to move"
+              "Selected ${selection.totalCount} item${if (selection.totalCount == 1) "" else "s"}"
             } else {
               "Lasso loop active (no items inside loop)"
             },
@@ -1849,8 +2404,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       val isWritingToolsActive = state.primaryTool == PrimaryTool.WRITING_TOOLS
       val subTool = state.activeWritingSubTool
 
-      // Study Tape Sub-Tool inside Writing Tools
       if (isWritingToolsActive && subTool == WritingSubTool.TAPE) {
+        val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Add study tape")
         val tape =
           StudyTapeItem(
             start = points.first(),
@@ -1866,6 +2421,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         savedDoc = modifiedDoc
         return@update state.copy(
           notebooks = updated,
+          undoHistory = nextUndo,
+          redoHistory = nextRedo,
           statusToastMessage = "Added Study Tape (tap strip to reveal/conceal)",
         )
       }
@@ -1873,31 +2430,40 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       val isPenOrPencil =
         isWritingToolsActive && (subTool == WritingSubTool.PEN || subTool == WritingSubTool.PENCIL)
 
-      // 2) Check "Scribble to Erase" Gesture when writing with Pen or Pencil
       if (
         state.scribbleToErase &&
           isPenOrPencil &&
           !snappedFromHold &&
           isScribbleEraseGesture(points)
       ) {
-        val (updated, modifiedDoc) =
-          updateCurrentPage(state) { page ->
-            val minX = points.minOf { it.x } - 22f
-            val maxX = points.maxOf { it.x } + 22f
-            val minY = points.minOf { it.y } - 22f
-            val maxY = points.maxOf { it.y } + 22f
-            page.copy(
-              strokes =
-                page.strokes.filterNot { s ->
-                  s.points.any { pt -> pt.x in minX..maxX && pt.y in minY..maxY }
-                }
-            )
+        val minX = points.minOf { it.x } - 16f
+        val maxX = points.maxOf { it.x } + 16f
+        val minY = points.minOf { it.y } - 16f
+        val maxY = points.maxOf { it.y } + 16f
+        val currentStrokes = currentDoc?.currentPage?.strokes.orEmpty()
+        val hasOverlappingStroke =
+          currentStrokes.any { s ->
+            s.points.any { pt -> pt.x in minX..maxX && pt.y in minY..maxY }
           }
-        savedDoc = modifiedDoc
-        return@update state.copy(
-          notebooks = updated,
-          statusToastMessage = "Scribble to Erase removed stroke",
-        )
+        if (hasOverlappingStroke) {
+          val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Scribble to erase")
+          val (updated, modifiedDoc) =
+            updateCurrentPage(state) { page ->
+              page.copy(
+                strokes =
+                  page.strokes.filterNot { s ->
+                    s.points.any { pt -> pt.x in minX..maxX && pt.y in minY..maxY }
+                  }
+              )
+            }
+          savedDoc = modifiedDoc
+          return@update state.copy(
+            notebooks = updated,
+            undoHistory = nextUndo,
+            redoHistory = nextRedo,
+            statusToastMessage = "Scribble to Erase removed stroke",
+          )
+        }
       }
 
       val isHighlighter = isWritingToolsActive && subTool == WritingSubTool.HIGHLIGHTER
@@ -1907,7 +2473,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           (isWritingToolsActive && subTool == WritingSubTool.DRAW_SHAPE)
       val isShapeStroke = (isExplicitShapeTool || snappedFromHold) && !isHighlighter
 
-      // Highlighter snaps to a crisp straight line when either "Draw in Straight Line" is ON OR when held at the end!
       val finalPoints =
         if (isHighlighter && (state.highlighterStraightLine || snappedFromHold)) {
           densifyPolyline(listOf(points.first(), points.last()), 8f)
@@ -1918,7 +2483,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       val baseWidth =
         state.thicknessPresets.getOrElse(state.selectedThicknessIndex) { 6.5f }
 
-      // Auto-decide geometric shape from the user's freehand stroke (both in Shapes Tool & Draw-and-Hold!)
       val detectedShapeKind =
         if (isShapeStroke) {
           autoDetectShapeKind(finalPoints)
@@ -1931,12 +2495,30 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           finalPoints to emptyList()
         }
 
+      // Align pressure samples 1:1 with geomPoints for natural variable-width rendering
+      val alignedPressures =
+        if (detectedShapeKind != null || pressures.isEmpty()) {
+          emptyList()
+        } else if (pressures.size == geomPoints.size) {
+          pressures
+        } else {
+          List(geomPoints.size) { idx ->
+            val srcIdx =
+              ((idx.toFloat() / (geomPoints.size - 1).coerceAtLeast(1)) *
+                  (pressures.size - 1).coerceAtLeast(0))
+                .toInt()
+                .coerceIn(0, pressures.lastIndex)
+            pressures[srcIdx]
+          }
+        }
+
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Draw stroke")
       val strokeId = java.util.UUID.randomUUID().toString()
       val stroke =
         DrawnStroke(
           id = strokeId,
           points = geomPoints,
-          pressures = pressures,
+          pressures = alignedPressures,
           color =
             when {
               isHighlighter -> state.selectedColor.copy(alpha = 0.38f)
@@ -1970,10 +2552,10 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           page.copy(strokes = page.strokes + stroke)
         }
       savedDoc = modifiedDoc
-      val updatedRedo = state.redoStack.toMutableMap().apply { remove(docId) }
       state.copy(
         notebooks = updatedNotebooks,
-        redoStack = updatedRedo,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
         selectedShapeKind = detectedShapeKind ?: state.selectedShapeKind,
         lastAutoDetectedShape = detectedShapeKind ?: state.lastAutoDetectedShape,
         activeShapeEditStrokeId = if (detectedShapeKind != null) strokeId else null,
@@ -1988,10 +2570,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     persistDocumentAsync(savedDoc)
   }
 
-  /**
-   * Updates a vertex control handle on an existing snapped shape so the user can resize/reshape
-   * lines, arrows, triangles, rectangles, circles, polygons, stars, and curves after drawing!
-   */
   fun moveShapeControlHandle(strokeId: String, handleIndex: Int, delta: Offset) {
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
@@ -2026,38 +2604,32 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   private fun isScribbleEraseGesture(points: List<Offset>): Boolean {
     if (points.size < 18) return false
     var xReversals = 0
-    var lastDx = 0f
+    var lastTurnX = points.first().x
+    var lastDir = 0
     var pathLength = 0f
     for (i in 1 until points.size) {
       val dx = points[i].x - points[i - 1].x
       val dy = points[i].y - points[i - 1].y
       pathLength += hypot(dx, dy)
-      if (abs(dx) > 4f) {
-        if (lastDx != 0f && (dx * lastDx) < 0f) {
+      val spanFromTurn = points[i].x - lastTurnX
+      if (abs(spanFromTurn) > 22f) {
+        val dir = if (spanFromTurn > 0f) 1 else -1
+        if (lastDir != 0 && dir != lastDir) {
           xReversals++
+          lastTurnX = points[i].x
+          lastDir = dir
+        } else if (lastDir == 0) {
+          lastDir = dir
+          lastTurnX = points[i].x
+        } else {
+          lastTurnX = points[i].x
         }
-        lastDx = dx
       }
     }
     val endToEnd = (points.last() - points.first()).getDistance()
-    return xReversals >= 4 && pathLength > endToEnd * 3.2f
+    return xReversals >= 4 && pathLength > (endToEnd * 3.8f).coerceAtLeast(160f)
   }
 
-  /**
-   * Upgraded 11-Shape Goodnotes 6 Auto-Deciding Geometric Shape Recognition Engine:
-   * Analyzes any freehand stroke and automatically recognizes:
-   * - LINE (Straight Line)
-   * - ARROW (Straight Line with end arrowhead hook)
-   * - CURVE (Smooth Quadratic/Cubic Arc)
-   * - CIRCLE (Closed loop with near-1:1 aspect ratio and low radial variance)
-   * - OVAL (Closed loop with elongated aspect ratio and low radial variance)
-   * - TRIANGLE (3 sharp corners — preserves actual drawn vertex orientations!)
-   * - RECTANGLE (4 axis-aligned corners)
-   * - DIAMOND (4 corners oriented near top/right/bottom/left midpoints)
-   * - PENTAGON (5 corners)
-   * - HEXAGON (6 corners)
-   * - STAR (5-pointed star with alternating radial peaks)
-   */
   fun autoDetectShapeKind(points: List<Offset>): ShapeKind {
     if (points.size < 3) return ShapeKind.LINE
     val start = points.first()
@@ -2075,7 +2647,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     val height = maxY - minY
     val diag = hypot(width, height).coerceAtLeast(1f)
 
-    // 1. Open Stroke (Start and End are far apart) -> Line, Arrow, or Curved Arc
     if (directDist > diag * 0.38f && pathLen < diag * 2.20f) {
       return if (pathLen <= directDist * 1.16f) {
         ShapeKind.LINE
@@ -2096,7 +2667,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       }
     }
 
-    // 2. Closed Contour -> Analyze radial circularity, aspect ratio, and corner vertices
     val cx = (minX + maxX) / 2f
     val cy = (minY + maxY) / 2f
     val rx = (width / 2f).coerceAtLeast(12f)
@@ -2150,7 +2720,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       }
     }
 
-    // Check if 4-corner shape is oriented as a Diamond (corners near top/right/bottom/left midpoints)
     val isDiamondOrientation =
       if (mergedCorners.size == 4) {
         val midTargets =
@@ -2211,9 +2780,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     }
   }
 
-  /**
-   * Builds both the densely interpolated stroke points AND the draggable Goodnotes vertex handles.
-   */
   private fun buildGeometricShapeWithHandles(
     points: List<Offset>,
     kind: ShapeKind,
@@ -2250,7 +2816,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           )
         ShapeKind.TRIANGLE -> {
           val diag = hypot(maxX - minX, maxY - minY).coerceAtLeast(1f)
-          val simplified = simplifyPolygon(points + points.first(), epsilon = diag * 0.08f).dropLast(1)
+          val simplified =
+            simplifyPolygon(points + points.first(), epsilon = diag * 0.08f).dropLast(1)
           if (simplified.size == 3) {
             simplified
           } else {
@@ -2390,6 +2957,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   fun toggleStudyTapeReveal(tapeId: String) {
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Toggle study tape")
       val (updated, modifiedDoc) =
         updateCurrentPage(state) { page ->
           page.copy(
@@ -2400,7 +2968,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           )
         }
       savedDoc = modifiedDoc
-      state.copy(notebooks = updated)
+      state.copy(notebooks = updated, undoHistory = nextUndo, redoHistory = nextRedo)
     }
     persistDocumentAsync(savedDoc)
   }
@@ -2408,6 +2976,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   fun addTextBoxAt(position: Offset, initialText: String = "Tap to edit note") {
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Add text box")
       val box =
         CanvasTextBox(
           position = position,
@@ -2419,7 +2988,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           page.copy(textBoxes = page.textBoxes + box)
         }
       savedDoc = modifiedDoc
-      state.copy(notebooks = updated)
+      state.copy(notebooks = updated, undoHistory = nextUndo, redoHistory = nextRedo)
     }
     persistDocumentAsync(savedDoc)
   }
@@ -2427,6 +2996,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   fun updateTextBox(id: String, newText: String) {
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Edit text box")
       val (updated, modifiedDoc) =
         updateCurrentPage(state) { page ->
           page.copy(
@@ -2436,7 +3006,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           )
         }
       savedDoc = modifiedDoc
-      state.copy(notebooks = updated)
+      state.copy(notebooks = updated, undoHistory = nextUndo, redoHistory = nextRedo)
     }
     persistDocumentAsync(savedDoc)
   }
@@ -2462,6 +3032,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   fun addStickyNoteAt(position: Offset) {
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Add sticky note")
       val note =
         StickyNoteItem(
           position = position,
@@ -2474,6 +3045,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       savedDoc = modifiedDoc
       state.copy(
         notebooks = updated,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
         primaryTool = PrimaryTool.WRITING_TOOLS,
         statusToastMessage = "Placed Sticky Note",
       )
@@ -2518,12 +3091,13 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   fun deleteStickyNote(id: String) {
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Delete sticky note")
       val (updated, modifiedDoc) =
         updateCurrentPage(state) { page ->
           page.copy(stickyNotes = page.stickyNotes.filterNot { it.id == id })
         }
       savedDoc = modifiedDoc
-      state.copy(notebooks = updated)
+      state.copy(notebooks = updated, undoHistory = nextUndo, redoHistory = nextRedo)
     }
     persistDocumentAsync(savedDoc)
   }
@@ -2531,6 +3105,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   fun insertElementStamp(stampType: ElementStampType) {
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Insert element")
       val existingCount =
         state.notebooks.find { it.id == state.activeTabId }?.currentPage?.elements?.size ?: 0
       val item =
@@ -2545,6 +3120,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       savedDoc = modifiedDoc
       state.copy(
         notebooks = updated,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
         activePopover = ActivePopover.NONE,
         statusToastMessage = "Inserted \"${stampType.label}\" element",
       )
@@ -2573,6 +3150,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   fun insertCanvasImage(bitmap: Bitmap) {
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Insert image")
       val img =
         CanvasImageItem(
           position = Offset(90f, 140f),
@@ -2585,6 +3163,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       savedDoc = modifiedDoc
       state.copy(
         notebooks = updated,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
         statusToastMessage = "Inserted Image onto page",
       )
     }
@@ -2609,9 +3189,67 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     persistDocumentAsync(savedDoc)
   }
 
+  fun resizeCanvasImage(id: String, scaleFactor: Float) {
+    var savedDoc: NotebookDocument? = null
+    _uiState.update { state ->
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Resize image")
+      val (updated, modifiedDoc) =
+        updateCurrentPage(state) { page ->
+          page.copy(
+            images =
+              page.images.map { img ->
+                if (img.id == id) {
+                  img.copy(
+                    widthDp = (img.widthDp * scaleFactor).coerceIn(60f, 480f),
+                    heightDp = (img.heightDp * scaleFactor).coerceIn(50f, 420f),
+                  )
+                } else img
+              }
+          )
+        }
+      savedDoc = modifiedDoc
+      state.copy(notebooks = updated, undoHistory = nextUndo, redoHistory = nextRedo)
+    }
+    persistDocumentAsync(savedDoc)
+  }
+
+  fun deleteCanvasImage(id: String) {
+    var savedDoc: NotebookDocument? = null
+    _uiState.update { state ->
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Delete image")
+      val (updated, modifiedDoc) =
+        updateCurrentPage(state) { page ->
+          page.copy(images = page.images.filterNot { it.id == id })
+        }
+      savedDoc = modifiedDoc
+      state.copy(notebooks = updated, undoHistory = nextUndo, redoHistory = nextRedo)
+    }
+    persistDocumentAsync(savedDoc)
+  }
+
+  fun addLaserTrail(points: List<Offset>) {
+    if (points.size < 2) return
+    _uiState.update { state ->
+      val trail = com.example.model.LaserTrailStroke(points = points)
+      state.copy(laserTrails = (state.laserTrails + trail).takeLast(12))
+    }
+  }
+
+  fun pruneExpiredLaserTrails() {
+    val now = System.currentTimeMillis()
+    _uiState.update { state ->
+      state.copy(laserTrails = state.laserTrails.filter { now - it.createdAtMs < 1400L })
+    }
+  }
+
+  fun selectSortOption(option: com.example.model.DocumentSortOption) {
+    _uiState.update { it.copy(sortOption = option) }
+  }
+
   fun bringSelectionToFront() {
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Bring to front")
       val selectedStrokes = state.lassoSelectedStrokeIds
       val (updated, modifiedDoc) =
         updateCurrentPage(state) { page ->
@@ -2628,6 +3266,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       savedDoc = modifiedDoc
       state.copy(
         notebooks = updated,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
         activePopover = ActivePopover.NONE,
         statusToastMessage = "Brought selection to front",
       )
@@ -2638,6 +3278,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   fun sendSelectionToBack() {
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Send to back")
       val selectedStrokes = state.lassoSelectedStrokeIds
       val (updated, modifiedDoc) =
         updateCurrentPage(state) { page ->
@@ -2654,6 +3295,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       savedDoc = modifiedDoc
       state.copy(
         notebooks = updated,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
         activePopover = ActivePopover.NONE,
         statusToastMessage = "Sent selection to back",
       )
@@ -2661,19 +3304,14 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     persistDocumentAsync(savedDoc)
   }
 
-  /**
-   * Toggles interactive Resize/Rotate handles on the Lasso selection AND scales the selected items.
-   */
   fun scaleSelectedStrokes() {
     toggleLassoResizeMode()
   }
 
-  /**
-   * Duplicates ONLY the items inside the active Lasso selection!
-   */
   fun duplicateSelectedStrokes() {
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Duplicate selection")
       val selectedStrokes = state.lassoSelectedStrokeIds
       val selectedTexts = state.lassoSelectedTextBoxIds
       val selectedElements = state.lassoSelectedElementIds
@@ -2745,6 +3383,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       savedDoc = modifiedDoc
       state.copy(
         notebooks = updated,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
         lassoLoopPoints = state.lassoLoopPoints.map { it + offsetShift },
         lassoSelectedStrokeIds = newStrokeIds,
         lassoSelectedTextBoxIds = newTextIds,
@@ -2757,9 +3397,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     persistDocumentAsync(savedDoc)
   }
 
-  /**
-   * Deletes ONLY the items enclosed by the active Lasso selection!
-   */
   fun deleteLassoSelection() {
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
@@ -2774,6 +3411,10 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           selectedElements.isNotEmpty() ||
           selectedStickies.isNotEmpty() ||
           selectedImages.isNotEmpty()
+
+      val (nextUndo, nextRedo) =
+        if (hasSpecificSelection) recordHistorySnapshot(state, "Delete selection")
+        else (state.undoHistory to state.redoHistory)
 
       val (updated, modifiedDoc) =
         updateCurrentPage(state) { page ->
@@ -2792,6 +3433,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       savedDoc = modifiedDoc
       state.copy(
         notebooks = updated,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
         showLassoSelection = false,
         isLassoResizeMode = false,
         lassoLoopPoints = emptyList(),
@@ -2808,25 +3451,88 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     persistDocumentAsync(savedDoc)
   }
 
+  // =========================================================================
+  // Unified Transactional Undo & Redo (Stage 2C)
+  // =========================================================================
+
   fun undo() {
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
       val docId = state.activeTabId
       val currentDoc = state.notebooks.find { it.id == docId } ?: return@update state
-      val page = currentDoc.currentPage
-      if (page.strokes.isEmpty()) return@update state
-      val lastStroke = page.strokes.last()
-      val (updatedNotebooks, modifiedDoc) =
-        updateCurrentPage(state) { p ->
-          p.copy(strokes = p.strokes.dropLast(1))
+      val undoList = state.undoHistory[docId].orEmpty()
+
+      if (undoList.isEmpty()) {
+        // Fallback if a stroke was added before snapshot history initialized
+        val page = currentDoc.currentPage
+        if (page.strokes.isEmpty()) return@update state
+        val currSnap =
+          DocumentHistorySnapshot(
+            pages = currentDoc.pages,
+            currentPageIndex = currentDoc.currentPageIndex,
+            actionDescription = "Undo stroke",
+          )
+        val (updatedNotebooks, modifiedDoc) =
+          updateCurrentPage(state) { p -> p.copy(strokes = p.strokes.dropLast(1)) }
+        savedDoc = modifiedDoc
+        val currentRedo = state.redoHistory[docId].orEmpty()
+        val nextRedo = state.redoHistory.toMutableMap().apply { put(docId, currentRedo + currSnap) }
+        return@update state.copy(
+          notebooks = updatedNotebooks,
+          redoHistory = nextRedo,
+          showLassoSelection = false,
+          isLassoResizeMode = false,
+        )
+      }
+
+      val targetSnap = undoList.last()
+      val currentSnapForRedo =
+        DocumentHistorySnapshot(
+          pages = currentDoc.pages,
+          currentPageIndex = currentDoc.currentPageIndex,
+          actionDescription = targetSnap.actionDescription,
+        )
+
+      val now = System.currentTimeMillis()
+      val updatedNotebooks =
+        state.notebooks.map { nb ->
+          if (nb.id != docId) nb
+          else {
+            nb.copy(
+                pages = targetSnap.pages,
+                currentPageIndex =
+                  targetSnap.currentPageIndex.coerceIn(
+                    0,
+                    (targetSnap.pages.size - 1).coerceAtLeast(0),
+                  ),
+                timestamp = currentTimestamp(),
+                revision = nb.revision + 1L,
+                updatedAtEpochMs = now,
+              )
+              .also { savedDoc = it }
+          }
         }
-      savedDoc = modifiedDoc
-      val currentRedo = state.redoStack[docId].orEmpty()
-      val updatedRedo =
-        state.redoStack.toMutableMap().apply { put(docId, currentRedo + lastStroke) }
+
+      val nextUndo = state.undoHistory.toMutableMap().apply { put(docId, undoList.dropLast(1)) }
+      val currentRedo = state.redoHistory[docId].orEmpty()
+      val nextRedo =
+        state.redoHistory
+          .toMutableMap()
+          .apply { put(docId, (currentRedo + currentSnapForRedo).takeLast(40)) }
+
       state.copy(
         notebooks = updatedNotebooks,
-        redoStack = updatedRedo,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
+        showLassoSelection = false,
+        isLassoResizeMode = false,
+        lassoLoopPoints = emptyList(),
+        lassoSelectedStrokeIds = emptySet(),
+        lassoSelectedTextBoxIds = emptySet(),
+        lassoSelectedElementIds = emptySet(),
+        lassoSelectedStickyIds = emptySet(),
+        lassoSelectedImageIds = emptySet(),
+        activeShapeEditStrokeId = null,
       )
     }
     persistDocumentAsync(savedDoc)
@@ -2836,19 +3542,53 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
       val docId = state.activeTabId
-      val currentRedo = state.redoStack[docId].orEmpty()
-      if (currentRedo.isEmpty()) return@update state
-      val strokeToRestore = currentRedo.last()
-      val (updatedNotebooks, modifiedDoc) =
-        updateCurrentPage(state) { p ->
-          p.copy(strokes = p.strokes + strokeToRestore)
+      val currentDoc = state.notebooks.find { it.id == docId } ?: return@update state
+      val redoList = state.redoHistory[docId].orEmpty()
+      if (redoList.isEmpty()) return@update state
+
+      val targetSnap = redoList.last()
+      val currentSnapForUndo =
+        DocumentHistorySnapshot(
+          pages = currentDoc.pages,
+          currentPageIndex = currentDoc.currentPageIndex,
+          actionDescription = targetSnap.actionDescription,
+        )
+
+      val now = System.currentTimeMillis()
+      val updatedNotebooks =
+        state.notebooks.map { nb ->
+          if (nb.id != docId) nb
+          else {
+            nb.copy(
+                pages = targetSnap.pages,
+                currentPageIndex =
+                  targetSnap.currentPageIndex.coerceIn(
+                    0,
+                    (targetSnap.pages.size - 1).coerceAtLeast(0),
+                  ),
+                timestamp = currentTimestamp(),
+                revision = nb.revision + 1L,
+                updatedAtEpochMs = now,
+              )
+              .also { savedDoc = it }
+          }
         }
-      savedDoc = modifiedDoc
-      val updatedRedo =
-        state.redoStack.toMutableMap().apply { put(docId, currentRedo.dropLast(1)) }
+
+      val nextRedo = state.redoHistory.toMutableMap().apply { put(docId, redoList.dropLast(1)) }
+      val currentUndo = state.undoHistory[docId].orEmpty()
+      val nextUndo =
+        state.undoHistory
+          .toMutableMap()
+          .apply { put(docId, (currentUndo + currentSnapForUndo).takeLast(40)) }
+
       state.copy(
         notebooks = updatedNotebooks,
-        redoStack = updatedRedo,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
+        showLassoSelection = false,
+        isLassoResizeMode = false,
+        lassoLoopPoints = emptyList(),
+        activeShapeEditStrokeId = null,
       )
     }
     persistDocumentAsync(savedDoc)
@@ -2857,6 +3597,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   fun clearCurrentPageStrokes() {
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Clear page")
       val (updated, modifiedDoc) =
         updateCurrentPage(state) { page ->
           page.copy(
@@ -2870,6 +3611,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       savedDoc = modifiedDoc
       state.copy(
         notebooks = updated,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
         showLassoSelection = false,
         isLassoResizeMode = false,
         lassoLoopPoints = emptyList(),
@@ -2882,28 +3625,240 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     persistDocumentAsync(savedDoc)
   }
 
+  // =========================================================================
+  // Page Management & Per-Page Templates (Stage 6)
+  // =========================================================================
+
   fun addNewPageToCurrentDocument() {
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Add page")
       val docId = state.activeTabId
+      val now = System.currentTimeMillis()
       val updated =
         state.notebooks.map { nb ->
           if (nb.id != docId) nb
           else {
-            val nextNum = nb.pages.size + 1
-            val nextPages = nb.pages + NotePage(pageNumber = nextNum)
+            val currentTemplate = nb.currentPage.resolvedTemplate(nb.paperTemplate)
+            val currentColor = nb.currentPage.resolvedColorTheme(nb.paperColorTheme)
+            val insertIdx = (nb.currentPageIndex + 1).coerceIn(0, nb.pages.size)
+            val newPage =
+              NotePage(
+                pageNumber = insertIdx + 1,
+                pageTemplate = currentTemplate,
+                pageColorTheme = currentColor,
+                customTemplateBitmap = nb.currentPage.customTemplateBitmap,
+                customTemplateKey = nb.currentPage.customTemplateKey,
+              )
+            val mutablePages = nb.pages.toMutableList()
+            mutablePages.add(insertIdx, newPage)
+            val renumbered =
+              mutablePages.mapIndexed { idx, p -> p.copy(pageNumber = idx + 1) }
             nb.copy(
-              pages = nextPages,
-              currentPageIndex = nextPages.size - 1,
-              timestamp = currentTimestamp(),
-            ).also { savedDoc = it }
+                pages = renumbered,
+                currentPageIndex = insertIdx,
+                timestamp = currentTimestamp(),
+                revision = nb.revision + 1L,
+                updatedAtEpochMs = now,
+              )
+              .also { savedDoc = it }
           }
         }
       state.copy(
         notebooks = updated,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
         showLassoSelection = false,
         isLassoResizeMode = false,
-        statusToastMessage = "Added Page ${savedDoc?.pages?.size ?: 1}",
+        activePopover = ActivePopover.NONE,
+        statusToastMessage = "Added Page ${(savedDoc?.currentPageIndex ?: 0) + 1}",
+      )
+    }
+    persistDocumentAsync(savedDoc)
+  }
+
+  fun addPageWithTemplate(
+    template: PaperTemplate,
+    colorTheme: PaperColorTheme? = null,
+    customTemplate: CustomPageTemplate? = null,
+    insertBeforeCurrent: Boolean = false,
+  ) {
+    var savedDoc: NotebookDocument? = null
+    _uiState.update { state ->
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Add ${template.label} page")
+      val docId = state.activeTabId
+      val now = System.currentTimeMillis()
+      val updated =
+        state.notebooks.map { nb ->
+          if (nb.id != docId) nb
+          else {
+            val insertIdx =
+              if (insertBeforeCurrent) nb.currentPageIndex.coerceIn(0, nb.pages.size)
+              else (nb.currentPageIndex + 1).coerceIn(0, nb.pages.size)
+            val newPage =
+              NotePage(
+                pageNumber = insertIdx + 1,
+                pageTemplate = template,
+                pageColorTheme = colorTheme ?: nb.paperColorTheme,
+                customTemplateBitmap = customTemplate?.previewBitmap,
+                customTemplateKey = customTemplate?.bitmapKey ?: "",
+              )
+            val mutablePages = nb.pages.toMutableList()
+            mutablePages.add(insertIdx, newPage)
+            val renumbered = mutablePages.mapIndexed { idx, p -> p.copy(pageNumber = idx + 1) }
+            nb.copy(
+                pages = renumbered,
+                currentPageIndex = insertIdx,
+                timestamp = currentTimestamp(),
+                revision = nb.revision + 1L,
+                updatedAtEpochMs = now,
+              )
+              .also { savedDoc = it }
+          }
+        }
+      state.copy(
+        notebooks = updated,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
+        showLassoSelection = false,
+        isLassoResizeMode = false,
+        activePopover = ActivePopover.NONE,
+        statusToastMessage = "Inserted ${template.label} page",
+      )
+    }
+    persistDocumentAsync(savedDoc)
+  }
+
+  fun duplicateCurrentPage() {
+    var savedDoc: NotebookDocument? = null
+    _uiState.update { state ->
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Duplicate page")
+      val docId = state.activeTabId
+      val now = System.currentTimeMillis()
+      val updated =
+        state.notebooks.map { nb ->
+          if (nb.id != docId) nb
+          else {
+            val sourcePage = nb.currentPage
+            val clonedPage =
+              sourcePage.copy(
+                strokes =
+                  sourcePage.strokes.map { it.copy(id = java.util.UUID.randomUUID().toString()) },
+                studyTapes =
+                  sourcePage.studyTapes.map { it.copy(id = java.util.UUID.randomUUID().toString()) },
+                textBoxes =
+                  sourcePage.textBoxes.map { it.copy(id = java.util.UUID.randomUUID().toString()) },
+                stickyNotes =
+                  sourcePage.stickyNotes.map { it.copy(id = java.util.UUID.randomUUID().toString()) },
+                elements =
+                  sourcePage.elements.map { it.copy(id = java.util.UUID.randomUUID().toString()) },
+                images =
+                  sourcePage.images.map { it.copy(id = java.util.UUID.randomUUID().toString()) },
+              )
+            val insertIdx = (nb.currentPageIndex + 1).coerceIn(0, nb.pages.size)
+            val mutablePages = nb.pages.toMutableList()
+            mutablePages.add(insertIdx, clonedPage)
+            val renumbered = mutablePages.mapIndexed { idx, p -> p.copy(pageNumber = idx + 1) }
+            nb.copy(
+                pages = renumbered,
+                currentPageIndex = insertIdx,
+                timestamp = currentTimestamp(),
+                revision = nb.revision + 1L,
+                updatedAtEpochMs = now,
+              )
+              .also { savedDoc = it }
+          }
+        }
+      state.copy(
+        notebooks = updated,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
+        activePopover = ActivePopover.NONE,
+        statusToastMessage = "Duplicated Page",
+      )
+    }
+    persistDocumentAsync(savedDoc)
+  }
+
+  fun deleteCurrentPage() {
+    var savedDoc: NotebookDocument? = null
+    _uiState.update { state ->
+      val docId = state.activeTabId
+      val doc = state.notebooks.find { it.id == docId } ?: return@update state
+      if (doc.pages.size <= 1) {
+        return@update state.copy(
+          statusToastMessage = "A notebook must have at least 1 page"
+        )
+      }
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Delete page")
+      val now = System.currentTimeMillis()
+      val updated =
+        state.notebooks.map { nb ->
+          if (nb.id != docId) nb
+          else {
+            val removeIdx = nb.currentPageIndex.coerceIn(0, nb.pages.lastIndex)
+            val remaining =
+              nb.pages
+                .filterIndexed { idx, _ -> idx != removeIdx }
+                .mapIndexed { idx, p -> p.copy(pageNumber = idx + 1) }
+            val nextIdx = removeIdx.coerceAtMost(remaining.lastIndex)
+            nb.copy(
+                pages = remaining,
+                currentPageIndex = nextIdx,
+                timestamp = currentTimestamp(),
+                revision = nb.revision + 1L,
+                updatedAtEpochMs = now,
+              )
+              .also { savedDoc = it }
+          }
+        }
+      state.copy(
+        notebooks = updated,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
+        showLassoSelection = false,
+        isLassoResizeMode = false,
+        activePopover = ActivePopover.NONE,
+        statusToastMessage = "Deleted page",
+      )
+    }
+    persistDocumentAsync(savedDoc)
+  }
+
+  /**
+   * Changes the current page's template and/or paper tint WITHOUT erasing existing handwriting,
+   * shapes, text boxes, or images on the page.
+   */
+  fun changeCurrentPageTemplate(
+    template: PaperTemplate,
+    colorTheme: PaperColorTheme? = null,
+    customTemplate: CustomPageTemplate? = null,
+  ) {
+    var savedDoc: NotebookDocument? = null
+    _uiState.update { state ->
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Change page template")
+      val (updated, modifiedDoc) =
+        updateCurrentPage(state) { page ->
+          page.copy(
+            pageTemplate = template,
+            pageColorTheme = colorTheme ?: page.pageColorTheme,
+            customTemplateBitmap =
+              if (template == PaperTemplate.CUSTOM) {
+                customTemplate?.previewBitmap ?: page.customTemplateBitmap
+              } else null,
+            customTemplateKey =
+              if (template == PaperTemplate.CUSTOM) {
+                customTemplate?.bitmapKey ?: page.customTemplateKey
+              } else "",
+          )
+        }
+      savedDoc = modifiedDoc
+      state.copy(
+        notebooks = updated,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
+        activePopover = ActivePopover.NONE,
+        statusToastMessage = "Page template set to ${template.label}",
       )
     }
     persistDocumentAsync(savedDoc)
@@ -2920,7 +3875,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         state.notebooks.map { nb ->
           if (nb.id != docId) nb
           else {
-            nb.copy(currentPageIndex = clamped).also { savedDoc = it }
+            nb.copy(currentPageIndex = clamped, revision = nb.revision + 1L).also { savedDoc = it }
           }
         }
       state.copy(
@@ -2955,17 +3910,18 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
       val docId = state.activeTabId
+      val currDoc = state.notebooks.find { it.id == docId } ?: return@update state
+      val entries = PaperTemplate.entries.filter { it != PaperTemplate.CUSTOM }
+      val currentTpl = currDoc.currentPage.resolvedTemplate(currDoc.paperTemplate)
+      val nextTemplate = entries[(entries.indexOf(currentTpl).coerceAtLeast(0) + 1) % entries.size]
+      val (updated, modifiedDoc) =
+        updateCurrentPage(state) { page ->
+          page.copy(pageTemplate = nextTemplate)
+        }
+      savedDoc = modifiedDoc
       state.copy(
-        notebooks =
-          state.notebooks.map { nb ->
-            if (nb.id != docId) nb
-            else {
-              val entries = PaperTemplate.entries
-              val nextTemplate = entries[(entries.indexOf(nb.paperTemplate) + 1) % entries.size]
-              nb.copy(paperTemplate = nextTemplate).also { savedDoc = it }
-            }
-          },
-        statusToastMessage = "Paper Template: ${savedDoc?.paperTemplate?.label ?: ""}",
+        notebooks = updated,
+        statusToastMessage = "Page Template: ${nextTemplate.label}",
       )
     }
     persistDocumentAsync(savedDoc)
@@ -2975,17 +3931,18 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
       val docId = state.activeTabId
+      val currDoc = state.notebooks.find { it.id == docId } ?: return@update state
+      val entries = PaperColorTheme.entries
+      val currentColor = currDoc.currentPage.resolvedColorTheme(currDoc.paperColorTheme)
+      val nextColor = entries[(entries.indexOf(currentColor).coerceAtLeast(0) + 1) % entries.size]
+      val (updated, modifiedDoc) =
+        updateCurrentPage(state) { page ->
+          page.copy(pageColorTheme = nextColor)
+        }
+      savedDoc = modifiedDoc
       state.copy(
-        notebooks =
-          state.notebooks.map { nb ->
-            if (nb.id != docId) nb
-            else {
-              val entries = PaperColorTheme.entries
-              val nextColor = entries[(entries.indexOf(nb.paperColorTheme) + 1) % entries.size]
-              nb.copy(paperColorTheme = nextColor).also { savedDoc = it }
-            }
-          },
-        statusToastMessage = "Paper Tint: ${savedDoc?.paperColorTheme?.label ?: ""}",
+        notebooks = updated,
+        statusToastMessage = "Paper Tint: ${nextColor.label}",
       )
     }
     persistDocumentAsync(savedDoc)
@@ -3091,18 +4048,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   }
 
   fun toggleLassoSelectionVisibility() {
-    _uiState.update {
-      it.copy(
-        showLassoSelection = false,
-        isLassoResizeMode = false,
-        lassoLoopPoints = emptyList(),
-        lassoSelectedStrokeIds = emptySet(),
-        lassoSelectedTextBoxIds = emptySet(),
-        lassoSelectedElementIds = emptySet(),
-        lassoSelectedStickyIds = emptySet(),
-        lassoSelectedImageIds = emptySet(),
-      )
-    }
+    clearLassoSelection()
   }
 
   fun toggleReadOnlyMode() {

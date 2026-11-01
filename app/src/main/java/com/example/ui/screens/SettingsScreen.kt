@@ -1,33 +1,31 @@
 package com.example.ui.screens
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.outlined.CheckCircle
-import androidx.compose.material.icons.outlined.DeleteSweep
 import androidx.compose.material.icons.outlined.Draw
-import androidx.compose.material.icons.outlined.PanTool
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Security
-import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -35,814 +33,674 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.model.NotebookDocument
+import com.example.R
+import com.example.model.AppThemeMode
 import com.example.model.PageScrollDirection
-import com.example.model.PrimaryTool
 import com.example.model.ToolbarDockPosition
-import com.example.ui.components.DockPositionIcon
-import com.example.ui.components.PrimaryToolCustomIcon
-import com.example.ui.components.SPenBarrelButtonIcon
-import com.example.ui.components.SecurityVaultShieldIcon
-import com.example.ui.theme.ActiveToolIconDark
-import com.example.ui.theme.ActiveToolPill
-import com.example.ui.theme.CanvasWorkspaceBg
 import com.example.ui.theme.DangerRed
-import com.example.ui.theme.PopoverBg
-import com.example.ui.theme.PopoverCardSelected
-import com.example.ui.theme.PopoverDivider
-import com.example.ui.theme.SubToolbarActiveCyan
-import com.example.ui.theme.SubToolbarActiveTeal
-import com.example.ui.theme.SubToolbarBorder
-import com.example.ui.theme.SubToolbarPillBg
+import com.example.ui.theme.LocalProNotesColors
 import com.example.ui.theme.SwitchBlue
-import com.example.ui.theme.TextPrimaryWhite
-import com.example.ui.theme.TextSecondaryGray
-import com.example.ui.theme.ToolbarIconLight
-import com.example.ui.theme.ToolbarNavy
 
+private enum class SettingsCategory(val label: String, val icon: ImageVector, val tag: String) {
+  GENERAL("General", Icons.Outlined.Tune, "settings_nav_general"),
+  PEN("Pen & Stylus", Icons.Outlined.Draw, "settings_nav_pen"),
+  PRIVACY("Privacy & Data", Icons.Outlined.Security, "settings_nav_privacy"),
+  ABOUT("About", Icons.Outlined.Info, "settings_nav_about"),
+}
+
+/**
+ * GoodNotes-style settings: category sidebar on the left, grouped inset lists on the right.
+ *
+ * NOTE: The signature is unchanged so existing call sites keep compiling. These parameters are
+ * no longer shown in the UI and can be deleted (here and at the call site) whenever you like:
+ * palmRejectionSensitivity, onPalmRejectionSensitivityChange, eraserAutoDeselect,
+ * onToggleEraserAutoDeselect, watermarkConfidentialExports, onToggleWatermarkConfidentialExports,
+ * activeNotebookCount, activeFolderCount, totalPagesCount.
+ */
 @Composable
 fun SettingsScreen(
-  notebooks: List<NotebookDocument>,
+  appThemeMode: AppThemeMode = AppThemeMode.DARK,
   onlyDrawWithStylus: Boolean,
-  palmRejectionSensitivity: String,
-  isLeftHandedPosture: Boolean,
-  toolbarDockPosition: ToolbarDockPosition,
-  pageScrollDirection: PageScrollDirection,
+  palmRejectionSensitivity: Float,
+  leftHandedPosture: Boolean,
   pullToAddPage: Boolean,
+  pageScrollDirection: PageScrollDirection,
+  toolbarDockPosition: ToolbarDockPosition = ToolbarDockPosition.TOP,
   eraserAutoDeselect: Boolean,
-  circleToLasso: Boolean,
   drawAndHold: Boolean,
+  circleToLasso: Boolean,
   scribbleToErase: Boolean,
   holdToErase: Boolean,
-  privacyScreenShieldEnabled: Boolean,
-  watermarkConfidentialExports: Boolean,
+  privacyScreenShieldEnabled: Boolean = true,
+  watermarkConfidentialExports: Boolean = true,
+  activeNotebookCount: Int,
+  activeFolderCount: Int = 0,
+  trashedNotebookCount: Int,
+  totalPagesCount: Int,
+  onSelectAppThemeMode: (AppThemeMode) -> Unit = {},
   onToggleOnlyDrawWithStylus: (Boolean) -> Unit,
-  onSelectPalmSensitivity: (String) -> Unit,
+  onPalmRejectionSensitivityChange: (Float) -> Unit,
   onToggleLeftHandedPosture: (Boolean) -> Unit,
-  onSelectToolbarDockPosition: (ToolbarDockPosition) -> Unit,
-  onSelectPageScrollDirection: (PageScrollDirection) -> Unit,
-  onResetSubToolbarPosition: () -> Unit,
   onTogglePullToAddPage: (Boolean) -> Unit,
+  onSelectPageScrollDirection: (PageScrollDirection) -> Unit,
+  onSelectToolbarDockPosition: (ToolbarDockPosition) -> Unit = {},
+  onResetSubToolbarPosition: () -> Unit = {},
   onToggleEraserAutoDeselect: (Boolean) -> Unit,
-  onToggleCircleToLasso: (Boolean) -> Unit,
   onToggleDrawAndHold: (Boolean) -> Unit,
+  onToggleCircleToLasso: (Boolean) -> Unit,
   onToggleScribbleToErase: (Boolean) -> Unit,
   onToggleHoldToErase: (Boolean) -> Unit,
-  onTogglePrivacyScreenShield: (Boolean) -> Unit,
-  onToggleWatermarkConfidentialExports: (Boolean) -> Unit,
+  onTogglePrivacyScreenShield: (Boolean) -> Unit = {},
+  onToggleWatermarkConfidentialExports: (Boolean) -> Unit = {},
   onEmptyTrash: () -> Unit,
-  onClearAllLocalData: () -> Unit,
-  onBackClick: () -> Unit,
+  onResetAllDataToDefaults: () -> Unit,
+  onNavigateBack: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  val totalPages = notebooks.sumOf { it.pages.size }
-  val totalStrokes = notebooks.sumOf { nb -> nb.pages.sumOf { it.strokes.size } }
-  val trashedCount = notebooks.count { it.isTrashed }
+  val colors = LocalProNotesColors.current
+  var selected by rememberSaveable { mutableStateOf(SettingsCategory.GENERAL) }
+  var showEmptyTrashConfirm by remember { mutableStateOf(false) }
+  var showResetFactoryConfirm by remember { mutableStateOf(false) }
 
-  Column(
+  Box(
     modifier =
       modifier
         .fillMaxSize()
-        .background(CanvasWorkspaceBg)
+        .background(colors.background)
         .testTag("settings_screen"),
   ) {
-    // 1:1 Goodnotes 6 Navy Top Bar (Matches Editor MainNavyToolbar & Documents Workspace)
-    Row(
-      modifier =
-        Modifier
-          .fillMaxWidth()
-          .height(54.dp)
-          .background(ToolbarNavy)
-          .padding(horizontal = 14.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        Box(
-          modifier =
-            Modifier
-              .size(36.dp)
-              .clip(RoundedCornerShape(9.dp))
-              .background(ActiveToolPill.copy(alpha = 0.16f))
-              .clickable(onClick = onBackClick)
-              .testTag("settings_back_button"),
-          contentAlignment = Alignment.Center,
-        ) {
-          Icon(
-            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-            contentDescription = "Back",
-            tint = ToolbarIconLight,
-            modifier = Modifier.size(20.dp),
-          )
-        }
-        Column {
-          Text(
-            text = "Workspace & Stylus Settings",
-            color = TextPrimaryWhite,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-          )
-          Text(
-            text = "Connected live to your Goodnotes 6 Editor & PDF Reader",
-            color = ToolbarIconLight.copy(alpha = 0.78f),
-            fontSize = 11.sp,
-          )
-        }
-      }
-
-      // Connected Quick Tools Badge Cluster (Matches Editor Navy Toolbar)
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        Box(
-          modifier =
-            Modifier
-              .size(34.dp)
-              .clip(RoundedCornerShape(8.dp))
-              .background(ActiveToolPill),
-          contentAlignment = Alignment.Center,
-        ) {
-          PrimaryToolCustomIcon(
-            tool = PrimaryTool.WRITING_TOOLS,
-            tint = ActiveToolIconDark,
-            modifier = Modifier.size(20.dp),
-          )
-        }
-        Box(
-          modifier =
-            Modifier
-              .size(34.dp)
-              .clip(RoundedCornerShape(8.dp))
-              .background(Color.White.copy(alpha = 0.12f)),
-          contentAlignment = Alignment.Center,
-        ) {
-          PrimaryToolCustomIcon(
-            tool = PrimaryTool.LASSO,
-            tint = ToolbarIconLight,
-            modifier = Modifier.size(20.dp),
-          )
-        }
-        Row(
-          modifier =
-            Modifier
-              .height(34.dp)
-              .clip(RoundedCornerShape(8.dp))
-              .background(SwitchBlue)
-              .clickable(onClick = onBackClick)
-              .padding(horizontal = 12.dp),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(5.dp),
-        ) {
-          Icon(
-            imageVector = Icons.Outlined.CheckCircle,
-            contentDescription = null,
-            tint = Color.White,
-            modifier = Modifier.size(15.dp),
-          )
-          Text(
-            text = "Done",
-            color = Color.White,
-            fontSize = 12.5.sp,
-            fontWeight = FontWeight.Bold,
-          )
-        }
-      }
-    }
-
-    // Live Connected Editor Status Pill Strip (Matches FloatingWritingSubToolbar aesthetic)
-    Row(
-      modifier =
-        Modifier
-          .fillMaxWidth()
-          .background(SubToolbarPillBg)
-          .border(width = 0.5.dp, color = SubToolbarBorder)
-          .horizontalScroll(rememberScrollState())
-          .padding(horizontal = 16.dp, vertical = 8.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      ConnectedStatusChip(
-        label = if (onlyDrawWithStylus) "Stylus-Only Mode" else "Stylus + Finger Ink",
-        active = onlyDrawWithStylus,
-        onClick = { onToggleOnlyDrawWithStylus(!onlyDrawWithStylus) },
-      )
-      ConnectedStatusChip(
-        label = "Scroll: ${pageScrollDirection.label}",
-        active = true,
-        onClick = {
-          onSelectPageScrollDirection(
-            if (pageScrollDirection == PageScrollDirection.HORIZONTAL) PageScrollDirection.VERTICAL
-            else PageScrollDirection.HORIZONTAL
-          )
-        },
-      )
-      ConnectedStatusChip(
-        label = "Toolbar: ${toolbarDockPosition.label}",
-        active = true,
-        onClick = {},
-      )
-      ConnectedStatusChip(
-        label = if (circleToLasso) "Circle-to-Lasso: ON" else "Circle-to-Lasso: OFF",
-        active = circleToLasso,
-        onClick = { onToggleCircleToLasso(!circleToLasso) },
-      )
-      ConnectedStatusChip(
-        label = if (!privacyScreenShieldEnabled) "Screen Recording: Allowed" else "FLAG_SECURE: Locked",
-        active = !privacyScreenShieldEnabled,
-        onClick = { onTogglePrivacyScreenShield(!privacyScreenShieldEnabled) },
-      )
-    }
-
-    Box(
-      modifier = Modifier.fillMaxSize(),
-      contentAlignment = Alignment.TopCenter,
-    ) {
+    Row(modifier = Modifier.fillMaxSize()) {
+      // ───────────── Sidebar ─────────────
       Column(
         modifier =
           Modifier
-            .widthIn(max = 700.dp)
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+            .width(280.dp)
+            .fillMaxHeight()
+            .background(colors.surface)
+            .padding(horizontal = 14.dp, vertical = 18.dp),
       ) {
-        // Section 1: Stylus & Palm Rejection (Finger Swipe & Zoom)
-        SettingsSectionCard(
-          title = "Stylus, S Pen & Palm Rejection",
-          subtitle = "Controls how active styluses, S Pen side buttons, and finger gestures interact with PDFs and pages",
-          icon = Icons.Outlined.PanTool,
-          badgeContent = {
-            SPenBarrelButtonIcon(
-              tint = SubToolbarActiveCyan,
-              isButtonPressed = holdToErase,
-              modifier = Modifier.size(18.dp),
-            )
-          },
+        Row(
+          modifier = Modifier.padding(start = 2.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-          SettingsSwitchItem(
-            title = "Only Draw with Stylus (Finger Swipe & PDF Pinch-Zoom)",
-            subtitle = "When enabled, only an active Stylus draws ink while 1-finger swipes turn pages (or pan when zoomed) and 2 fingers pinch-zoom.",
-            checked = onlyDrawWithStylus,
-            onCheckedChange = onToggleOnlyDrawWithStylus,
-            testTag = "settings_stylus_only_switch",
-          )
-
-          HorizontalDivider(color = PopoverDivider, modifier = Modifier.padding(vertical = 8.dp))
-
-          Text(
-            text = "Palm Rejection Sensitivity",
-            color = TextPrimaryWhite,
-            fontSize = 13.5.sp,
-            fontWeight = FontWeight.Medium,
-          )
-          Spacer(modifier = Modifier.height(6.dp))
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            listOf("Low", "Standard", "High").forEach { level ->
-              val isSelected = palmRejectionSensitivity == level
-              Box(
-                modifier =
-                  Modifier
-                    .weight(1f)
-                    .height(36.dp)
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(if (isSelected) SwitchBlue else PopoverCardSelected)
-                    .border(
-                      width = 1.dp,
-                      color = if (isSelected) SubToolbarActiveCyan.copy(alpha = 0.65f) else SubToolbarBorder,
-                      shape = RoundedCornerShape(9.dp),
-                    )
-                    .clickable { onSelectPalmSensitivity(level) },
-                contentAlignment = Alignment.Center,
-              ) {
-                Text(
-                  text = level,
-                  color = Color.White,
-                  fontSize = 12.sp,
-                  fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                )
-              }
-            }
-          }
-
-          HorizontalDivider(color = PopoverDivider, modifier = Modifier.padding(vertical = 8.dp))
-
-          SettingsSwitchItem(
-            title = "Left-Handed Writing Posture",
-            subtitle = "Optimizes palm rejection zone for left-handed stylus writing angles.",
-            checked = isLeftHandedPosture,
-            onCheckedChange = onToggleLeftHandedPosture,
-            testTag = "settings_left_handed_switch",
-          )
-        }
-
-        // Section 2: Document Editing, Scrolling Direction & Repositionable Toolbar
-        SettingsSectionCard(
-          title = "Document Editing, PDF Zoom & Toolbar Dock",
-          subtitle = "Configure book-style horizontal or vertical page scrolling and main navy toolbar placement",
-          icon = Icons.Outlined.Tune,
-          badgeContent = {
-            DockPositionIcon(
-              position = toolbarDockPosition,
-              tint = SubToolbarActiveCyan,
-              modifier = Modifier.size(18.dp),
-            )
-          },
-        ) {
-          Text(
-            text = "Page Scrolling Direction (PDFs & Notebooks)",
-            color = TextPrimaryWhite,
-            fontSize = 13.5.sp,
-            fontWeight = FontWeight.Medium,
-          )
-          Text(
-            text = "Choose whether swiping navigates pages Horizontally (book-style) or Vertically (continuous scroll).",
-            color = TextSecondaryGray,
-            fontSize = 11.5.sp,
-          )
-          Spacer(modifier = Modifier.height(8.dp))
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            PageScrollDirection.entries.forEach { dir ->
-              val isSelected = pageScrollDirection == dir
-              Box(
-                modifier =
-                  Modifier
-                    .weight(1f)
-                    .height(36.dp)
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(if (isSelected) SwitchBlue else PopoverCardSelected)
-                    .border(
-                      width = 1.dp,
-                      color = if (isSelected) SubToolbarActiveCyan.copy(alpha = 0.65f) else SubToolbarBorder,
-                      shape = RoundedCornerShape(9.dp),
-                    )
-                    .clickable { onSelectPageScrollDirection(dir) }
-                    .testTag("settings_scroll_${dir.name.lowercase()}"),
-                contentAlignment = Alignment.Center,
-              ) {
-                Text(
-                  text = "${dir.label} Swipe",
-                  color = Color.White,
-                  fontSize = 12.sp,
-                  fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                )
-              }
-            }
-          }
-
-          HorizontalDivider(color = PopoverDivider, modifier = Modifier.padding(vertical = 8.dp))
-
-          Text(
-            text = "Main Navy Toolbar Position (Top, Bottom, Left, Right)",
-            color = TextPrimaryWhite,
-            fontSize = 13.5.sp,
-            fontWeight = FontWeight.Medium,
-          )
-          Text(
-            text = "Dock the primary navy toolbar at the Top, Bottom, Left, or Right edge, or long-press the toolbar in the editor to reposition it anytime.",
-            color = TextSecondaryGray,
-            fontSize = 11.5.sp,
-          )
-          Spacer(modifier = Modifier.height(8.dp))
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-          ) {
-            ToolbarDockPosition.entries.forEach { pos ->
-              val isSelected = toolbarDockPosition == pos
-              Row(
-                modifier =
-                  Modifier
-                    .weight(1f)
-                    .height(36.dp)
-                    .clip(RoundedCornerShape(9.dp))
-                    .background(if (isSelected) SwitchBlue else PopoverCardSelected)
-                    .border(
-                      width = 1.dp,
-                      color = if (isSelected) SubToolbarActiveCyan.copy(alpha = 0.65f) else SubToolbarBorder,
-                      shape = RoundedCornerShape(9.dp),
-                    )
-                    .clickable { onSelectToolbarDockPosition(pos) }
-                    .padding(horizontal = 6.dp)
-                    .testTag("settings_dock_${pos.name.lowercase()}"),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center,
-              ) {
-                DockPositionIcon(
-                  position = pos,
-                  tint = Color.White,
-                  modifier = Modifier.size(14.dp),
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                  text = pos.label,
-                  color = Color.White,
-                  fontSize = 11.5.sp,
-                  fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                )
-              }
-            }
-          }
-          Spacer(modifier = Modifier.height(8.dp))
           Box(
             modifier =
               Modifier
-                .fillMaxWidth()
-                .height(36.dp)
-                .clip(RoundedCornerShape(9.dp))
-                .background(SubToolbarPillBg)
-                .border(1.dp, SubToolbarBorder, RoundedCornerShape(9.dp))
-                .clickable(onClick = onResetSubToolbarPosition),
+                .size(36.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .clickable(onClick = onNavigateBack)
+                .testTag("settings_back_button"),
             contentAlignment = Alignment.Center,
           ) {
+            Icon(
+              imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+              contentDescription = "Back",
+              tint = colors.textPrimary,
+              modifier = Modifier.size(22.dp),
+            )
+          }
+          Text(
+            text = "Settings",
+            color = colors.textPrimary,
+            fontSize = 22.sp,
+            fontWeight = FontWeight.Bold,
+          )
+        }
+
+        Spacer(modifier = Modifier.height(22.dp))
+
+        SettingsCategory.entries.forEach { category ->
+          SidebarItem(
+            category = category,
+            isSelected = category == selected,
+            onClick = { selected = category },
+          )
+          Spacer(modifier = Modifier.height(2.dp))
+        }
+      }
+
+      Box(
+        modifier =
+          Modifier
+            .width(1.dp)
+            .fillMaxHeight()
+            .background(colors.divider),
+      )
+
+      // ───────────── Content ─────────────
+      key(selected) {
+        Box(
+          modifier =
+            Modifier
+              .weight(1f)
+              .fillMaxHeight()
+              .verticalScroll(rememberScrollState())
+              .padding(horizontal = 32.dp, vertical = 28.dp),
+          contentAlignment = Alignment.TopCenter,
+        ) {
+          Column(
+            modifier = Modifier.widthIn(max = 640.dp).fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(28.dp),
+          ) {
             Text(
-              text = "Reset Floating Writing Tools Pill to Top-Center",
-              color = SubToolbarActiveCyan,
-              fontSize = 12.sp,
-              fontWeight = FontWeight.SemiBold,
+              text = selected.label,
+              color = colors.textPrimary,
+              fontSize = 30.sp,
+              fontWeight = FontWeight.Bold,
+              modifier = Modifier.padding(start = 4.dp),
             )
-          }
 
-          HorizontalDivider(color = PopoverDivider, modifier = Modifier.padding(vertical = 8.dp))
+            when (selected) {
+              SettingsCategory.GENERAL -> {
+                SettingsGroup(header = "Appearance") {
+                  SettingsRow(
+                    title = "Theme",
+                    showDivider = false,
+                    trailing = {
+                      SegmentedControl(
+                        options = AppThemeMode.entries,
+                        selected = appThemeMode,
+                        label = { it.label },
+                        tag = { "settings_theme_${it.name.lowercase()}" },
+                        onSelect = onSelectAppThemeMode,
+                      )
+                    },
+                  )
+                }
 
-          SettingsSwitchItem(
-            title = "Pull to Add New Page",
-            subtitle = "Automatically append a matching template page when swiping past the last page.",
-            checked = pullToAddPage,
-            onCheckedChange = onTogglePullToAddPage,
-            testTag = "settings_pull_add_page_switch",
-          )
+                SettingsGroup(header = "Pages") {
+                  SettingsRow(
+                    title = "Page Scrolling",
+                    trailing = {
+                      SegmentedControl(
+                        options = PageScrollDirection.entries,
+                        selected = pageScrollDirection,
+                        label = { it.label },
+                        tag = { "settings_scroll_${it.name.lowercase()}" },
+                        onSelect = onSelectPageScrollDirection,
+                      )
+                    },
+                  )
+                  SettingsToggleRow(
+                    title = "Pull to Add Page",
+                    subtitle = "Swipe past the last page to add a new one",
+                    checked = pullToAddPage,
+                    onCheckedChange = onTogglePullToAddPage,
+                    testTag = "settings_pull_to_add_page_switch",
+                    showDivider = false,
+                  )
+                }
 
-          HorizontalDivider(color = PopoverDivider, modifier = Modifier.padding(vertical = 8.dp))
+                SettingsGroup(header = "Toolbar") {
+                  SettingsRow(
+                    title = "Toolbar Position",
+                    trailing = {
+                      SegmentedControl(
+                        options = ToolbarDockPosition.entries,
+                        selected = toolbarDockPosition,
+                        label = { it.name.lowercase().replaceFirstChar { c -> c.uppercase() } },
+                        tag = { "settings_toolbar_${it.name.lowercase()}" },
+                        onSelect = onSelectToolbarDockPosition,
+                        segmentWidth = 76.dp,
+                      )
+                    },
+                  )
+                  SettingsRow(
+                    title = "Reset Toolbar Position",
+                    titleColor = colors.accentBlue,
+                    showDivider = false,
+                    modifier =
+                      Modifier
+                        .clickable(onClick = onResetSubToolbarPosition)
+                        .testTag("settings_reset_toolbar_button"),
+                  )
+                }
+              }
 
-          SettingsSwitchItem(
-            title = "Auto-Deselect Eraser",
-            subtitle = "Automatically switch back to Writing Tools after lifting the Eraser.",
-            checked = eraserAutoDeselect,
-            onCheckedChange = onToggleEraserAutoDeselect,
-            testTag = "settings_auto_deselect_eraser_switch",
-          )
-        }
+              SettingsCategory.PEN -> {
+                SettingsGroup(header = "Input") {
+                  SettingsToggleRow(
+                    title = "Only Draw with Stylus",
+                    subtitle = "Your S Pen draws while your finger scrolls and zooms",
+                    checked = onlyDrawWithStylus,
+                    onCheckedChange = onToggleOnlyDrawWithStylus,
+                    testTag = "settings_stylus_only_switch",
+                  )
+                  SettingsToggleRow(
+                    title = "Left-Handed Mode",
+                    subtitle = "Moves palm rejection to the left side of the page",
+                    checked = leftHandedPosture,
+                    onCheckedChange = onToggleLeftHandedPosture,
+                    testTag = "settings_left_handed_switch",
+                    showDivider = false,
+                  )
+                }
 
-        // Section 3: Pen Gestures & Smart Ink
-        SettingsSectionCard(
-          title = "Pen Gestures, Circle-to-Lasso & Smart Ink",
-          subtitle = "Interactive Lasso actions (Move, Cut, Copy, Paste, Resize, Rotate, Recolor, Duplicate, Delete)",
-          icon = Icons.Outlined.Draw,
-          badgeContent = {
-            PrimaryToolCustomIcon(
-              tool = PrimaryTool.LASSO,
-              tint = SubToolbarActiveCyan,
-              modifier = Modifier.size(19.dp),
-            )
-          },
-        ) {
-          SettingsSwitchItem(
-            title = "Circle to Lasso (Circle → Hold or Lift → Hold Circle)",
-            subtitle = "Draw a closed circle around content and hold (or lift and hold on/inside the circle) to convert it into an active Lasso selection with Cut, Copy, Paste, Resize, Recolor, and Delete.",
-            checked = circleToLasso,
-            onCheckedChange = onToggleCircleToLasso,
-            testTag = "settings_circle_to_lasso_switch",
-          )
+                SettingsGroup(header = "Gestures") {
+                  SettingsToggleRow(
+                    title = "Draw and Hold",
+                    subtitle = "Pause at the end of a stroke to snap it into a clean shape",
+                    checked = drawAndHold,
+                    onCheckedChange = onToggleDrawAndHold,
+                    testTag = "settings_draw_and_hold_switch",
+                  )
+                  SettingsToggleRow(
+                    title = "Circle to Lasso",
+                    subtitle = "Loop around your writing and hold to select it",
+                    checked = circleToLasso,
+                    onCheckedChange = onToggleCircleToLasso,
+                    testTag = "settings_circle_to_lasso_switch",
+                  )
+                  SettingsToggleRow(
+                    title = "Scribble to Erase",
+                    subtitle = "Scribble over ink to erase it without changing tools",
+                    checked = scribbleToErase,
+                    onCheckedChange = onToggleScribbleToErase,
+                    testTag = "settings_scribble_to_erase_switch",
+                  )
+                  SettingsToggleRow(
+                    title = "S Pen Button Erases",
+                    subtitle = "Hold the side button, or press and hold, to erase",
+                    checked = holdToErase,
+                    onCheckedChange = onToggleHoldToErase,
+                    testTag = "settings_hold_to_erase_switch",
+                    showDivider = false,
+                  )
+                }
+              }
 
-          HorizontalDivider(color = PopoverDivider, modifier = Modifier.padding(vertical = 8.dp))
+              SettingsCategory.PRIVACY -> {
+                SettingsGroup(
+                  header = "Privacy",
+                  footer = "Also hides your notes in the recent apps view.",
+                ) {
+                  SettingsToggleRow(
+                    title = "Block Screenshots & Recording",
+                    checked = privacyScreenShieldEnabled,
+                    onCheckedChange = onTogglePrivacyScreenShield,
+                    testTag = "settings_privacy_shield_switch",
+                    showDivider = false,
+                  )
+                }
 
-          SettingsSwitchItem(
-            title = "Draw and Hold (11 Auto-Recognized Shapes)",
-            subtitle = "Pause at the end of a stroke to automatically recognize and snap into Lines, Arrows, Curves, Circles, Ovals, Triangles, Rectangles, Diamonds, Pentagons, Hexagons, or Stars.",
-            checked = drawAndHold,
-            onCheckedChange = onToggleDrawAndHold,
-            testTag = "settings_draw_and_hold_switch",
-          )
+                SettingsGroup(
+                  header = "Data",
+                  footer = "Resetting deletes all your notebooks and folders and restores the starter notebooks. This can't be undone.",
+                ) {
+                  val hasTrash = trashedNotebookCount > 0
+                  SettingsRow(
+                    title = "Empty Trash",
+                    titleColor = if (hasTrash) DangerRed else colors.textSecondary,
+                    modifier =
+                      Modifier
+                        .clickable(enabled = hasTrash) { showEmptyTrashConfirm = true }
+                        .testTag("settings_empty_trash_button"),
+                    trailing = {
+                      Text(
+                        text = "$trashedNotebookCount",
+                        color = colors.textSecondary,
+                        fontSize = 14.sp,
+                      )
+                    },
+                  )
+                  SettingsRow(
+                    title = "Reset All Notes",
+                    titleColor = DangerRed,
+                    showDivider = false,
+                    modifier =
+                      Modifier
+                        .clickable { showResetFactoryConfirm = true }
+                        .testTag("settings_reset_defaults_button"),
+                  )
+                }
+              }
 
-          HorizontalDivider(color = PopoverDivider, modifier = Modifier.padding(vertical = 8.dp))
-
-          SettingsSwitchItem(
-            title = "Scribble to Erase",
-            checked = scribbleToErase,
-            subtitle = "Scratch out handwriting rapidly back-and-forth to erase strokes beneath.",
-            onCheckedChange = onToggleScribbleToErase,
-            testTag = "settings_scribble_to_erase_switch",
-          )
-
-          HorizontalDivider(color = PopoverDivider, modifier = Modifier.padding(vertical = 8.dp))
-
-          SettingsSwitchItem(
-            title = "Hold in Place & S Pen Side Button Erase",
-            subtitle = "Press and hold stationary on the page OR press the S Pen barrel side button to activate immediate precision erasing (including Study Tape).",
-            checked = holdToErase,
-            onCheckedChange = onToggleHoldToErase,
-            testTag = "settings_hold_to_erase_switch",
-          )
-        }
-
-        // Section 4: Cybersecurity & Privacy Vault
-        SettingsSectionCard(
-          title = "Cybersecurity, Screen Recording & Privacy Vault",
-          subtitle = "Screen recording & screenshots are unlocked by default unless Privacy Shield is enabled",
-          icon = Icons.Outlined.Security,
-          badgeContent = {
-            SecurityVaultShieldIcon(
-              tint = if (privacyScreenShieldEnabled) Color(0xFF34C759) else SubToolbarActiveCyan,
-              isLocked = privacyScreenShieldEnabled,
-              modifier = Modifier.size(18.dp),
-            )
-          },
-        ) {
-          SettingsSwitchItem(
-            title = "Privacy Screen Shield (Optional FLAG_SECURE)",
-            subtitle = "Off by default so you can freely record your screen and take screenshots. Turn ON only if you want Android hardware protection against screen recording.",
-            checked = privacyScreenShieldEnabled,
-            onCheckedChange = onTogglePrivacyScreenShield,
-            testTag = "settings_privacy_shield_switch",
-          )
-
-          HorizontalDivider(color = PopoverDivider, modifier = Modifier.padding(vertical = 8.dp))
-
-          SettingsSwitchItem(
-            title = "Confidential SHA-256 PDF Export Watermark",
-            subtitle = "Embeds a cryptographic SHA-256 document integrity fingerprint and timestamp footer on exported PDF documents.",
-            checked = watermarkConfidentialExports,
-            onCheckedChange = onToggleWatermarkConfidentialExports,
-            testTag = "settings_watermark_exports_switch",
-          )
-        }
-
-        // Section 5: Local Device Storage (Room SQLite)
-        SettingsSectionCard(
-          title = "On-Device Local Storage (Room SQLite)",
-          subtitle = "Instant offline persistence for all notebooks, imported PDFs, ink strokes, and study tapes",
-          icon = Icons.Outlined.Storage,
-        ) {
-          Row(
-            modifier =
-              Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .background(SubToolbarPillBg)
-                .border(1.dp, SubToolbarBorder, RoundedCornerShape(10.dp))
-                .padding(12.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-          ) {
-            StorageStatItem(label = "Notebooks", value = "${notebooks.size}")
-            StorageStatItem(label = "Total Pages", value = "$totalPages")
-            StorageStatItem(label = "Ink Strokes", value = "$totalStrokes")
-            StorageStatItem(label = "In Trash", value = "$trashedCount")
-          }
-
-          Spacer(modifier = Modifier.height(12.dp))
-
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-          ) {
-            Row(
-              modifier =
-                Modifier
-                  .weight(1f)
-                  .height(38.dp)
-                  .clip(RoundedCornerShape(9.dp))
-                  .background(PopoverCardSelected)
-                  .border(1.dp, SubToolbarBorder, RoundedCornerShape(9.dp))
-                  .clickable(onClick = onEmptyTrash),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.Center,
-            ) {
-              Icon(
-                imageVector = Icons.Outlined.DeleteSweep,
-                contentDescription = null,
-                tint = TextPrimaryWhite,
-                modifier = Modifier.size(16.dp),
-              )
-              Spacer(modifier = Modifier.width(6.dp))
-              Text(
-                text = "Empty Trash ($trashedCount)",
-                color = TextPrimaryWhite,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-              )
+              SettingsCategory.ABOUT -> {
+                Column(
+                  modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                  horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                  Image(
+                    painter = painterResource(id = R.drawable.app_logo),
+                    contentDescription = "Pro Notes Logo",
+                    contentScale = ContentScale.Crop,
+                    modifier =
+                      Modifier
+                        .size(72.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                        .background(Color.White)
+                        .border(1.dp, colors.border, RoundedCornerShape(18.dp)),
+                  )
+                  Spacer(modifier = Modifier.height(12.dp))
+                  Text(
+                    text = "Pro Notes",
+                    color = colors.textPrimary,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                  )
+                  Spacer(modifier = Modifier.height(4.dp))
+                  Text(
+                    text = "Handwriting, PDF annotation, and infinite whiteboards",
+                    color = colors.textSecondary,
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center,
+                  )
+                }
+                SettingsGroup {
+                  SettingsRow(
+                    title = "Version",
+                    showDivider = false,
+                    trailing = {
+                      Text(text = "2.0.0", color = colors.textSecondary, fontSize = 14.sp)
+                    },
+                  )
+                }
+              }
             }
-
-            Row(
-              modifier =
-                Modifier
-                  .weight(1f)
-                  .height(38.dp)
-                  .clip(RoundedCornerShape(9.dp))
-                  .background(DangerRed.copy(alpha = 0.16f))
-                  .border(1.dp, DangerRed.copy(alpha = 0.45f), RoundedCornerShape(9.dp))
-                  .clickable(onClick = onClearAllLocalData)
-                  .testTag("settings_clear_all_data_button"),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.Center,
-            ) {
-              Text(
-                text = "Reset All Local Notes",
-                color = DangerRed,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-              )
-            }
           }
         }
+      }
+    }
 
-        Spacer(modifier = Modifier.height(24.dp))
+    if (showEmptyTrashConfirm) {
+      DestructiveConfirmationModal(
+        title = "Empty Trash?",
+        message = "Everything in the trash will be permanently deleted. This can't be undone.",
+        confirmText = "Empty Trash",
+        onConfirm = {
+          showEmptyTrashConfirm = false
+          onEmptyTrash()
+        },
+        onDismiss = { showEmptyTrashConfirm = false },
+      )
+    }
+
+    if (showResetFactoryConfirm) {
+      DestructiveConfirmationModal(
+        title = "Reset All Notes?",
+        message = "All your notebooks and folders will be deleted and the starter notebooks restored. This can't be undone.",
+        confirmText = "Reset Everything",
+        onConfirm = {
+          showResetFactoryConfirm = false
+          onResetAllDataToDefaults()
+        },
+        onDismiss = { showResetFactoryConfirm = false },
+      )
+    }
+  }
+}
+
+@Composable
+private fun SidebarItem(
+  category: SettingsCategory,
+  isSelected: Boolean,
+  onClick: () -> Unit,
+) {
+  val colors = LocalProNotesColors.current
+  Row(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .height(46.dp)
+        .clip(RoundedCornerShape(10.dp))
+        .background(if (isSelected) colors.accentBlue.copy(alpha = 0.14f) else Color.Transparent)
+        .clickable(onClick = onClick)
+        .padding(horizontal = 12.dp)
+        .testTag(category.tag),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.spacedBy(12.dp),
+  ) {
+    Icon(
+      imageVector = category.icon,
+      contentDescription = null,
+      tint = if (isSelected) colors.accentBlue else colors.textSecondary,
+      modifier = Modifier.size(21.dp),
+    )
+    Text(
+      text = category.label,
+      color = if (isSelected) colors.accentBlue else colors.textPrimary,
+      fontSize = 15.sp,
+      fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+    )
+  }
+}
+
+@Composable
+private fun SettingsGroup(
+  header: String? = null,
+  footer: String? = null,
+  content: @Composable () -> Unit,
+) {
+  val colors = LocalProNotesColors.current
+  Column(modifier = Modifier.fillMaxWidth()) {
+    if (header != null) {
+      Text(
+        text = header.uppercase(),
+        color = colors.textSecondary,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.padding(start = 16.dp, bottom = 8.dp),
+      )
+    }
+    Column(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .clip(RoundedCornerShape(14.dp))
+          .background(colors.surface),
+    ) {
+      content()
+    }
+    if (footer != null) {
+      Text(
+        text = footer,
+        color = colors.textSecondary,
+        fontSize = 12.sp,
+        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 8.dp),
+      )
+    }
+  }
+}
+
+@Composable
+private fun SettingsRow(
+  title: String,
+  modifier: Modifier = Modifier,
+  subtitle: String? = null,
+  titleColor: Color? = null,
+  showDivider: Boolean = true,
+  trailing: (@Composable () -> Unit)? = null,
+) {
+  val colors = LocalProNotesColors.current
+  Column(modifier = Modifier.fillMaxWidth()) {
+    Row(
+      modifier =
+        modifier
+          .fillMaxWidth()
+          .heightIn(min = 54.dp)
+          .padding(horizontal = 16.dp, vertical = 10.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
+        Text(
+          text = title,
+          color = titleColor ?: colors.textPrimary,
+          fontSize = 15.sp,
+          fontWeight = FontWeight.Medium,
+        )
+        if (subtitle != null) {
+          Spacer(modifier = Modifier.height(2.dp))
+          Text(text = subtitle, color = colors.textSecondary, fontSize = 12.sp)
+        }
+      }
+      trailing?.invoke()
+    }
+    if (showDivider) {
+      HorizontalDivider(modifier = Modifier.padding(start = 16.dp), color = colors.divider)
+    }
+  }
+}
+
+@Composable
+private fun SettingsToggleRow(
+  title: String,
+  checked: Boolean,
+  onCheckedChange: (Boolean) -> Unit,
+  testTag: String,
+  subtitle: String? = null,
+  showDivider: Boolean = true,
+) {
+  val colors = LocalProNotesColors.current
+  SettingsRow(
+    title = title,
+    subtitle = subtitle,
+    showDivider = showDivider,
+    trailing = {
+      Switch(
+        checked = checked,
+        onCheckedChange = onCheckedChange,
+        colors =
+          SwitchDefaults.colors(
+            checkedThumbColor = Color.White,
+            checkedTrackColor = SwitchBlue,
+            uncheckedThumbColor = Color.White,
+            uncheckedTrackColor = colors.border,
+            uncheckedBorderColor = Color.Transparent,
+          ),
+        modifier = Modifier.testTag(testTag),
+      )
+    },
+  )
+}
+
+@Composable
+private fun <T> SegmentedControl(
+  options: List<T>,
+  selected: T,
+  label: (T) -> String,
+  tag: (T) -> String,
+  onSelect: (T) -> Unit,
+  segmentWidth: androidx.compose.ui.unit.Dp = 88.dp,
+) {
+  val colors = LocalProNotesColors.current
+  Row(
+    modifier =
+      Modifier
+        .clip(RoundedCornerShape(10.dp))
+        .background(colors.surfaceVariant)
+        .padding(2.dp),
+  ) {
+    options.forEach { option ->
+      val isSelected = option == selected
+      Box(
+        modifier =
+          Modifier
+            .width(segmentWidth)
+            .height(32.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (isSelected) colors.accentBlue else Color.Transparent)
+            .clickable { onSelect(option) }
+            .testTag(tag(option)),
+        contentAlignment = Alignment.Center,
+      ) {
+        Text(
+          text = label(option),
+          color = if (isSelected) Color.White else colors.textPrimary,
+          fontSize = 13.sp,
+          fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+        )
       }
     }
   }
 }
 
 @Composable
-private fun ConnectedStatusChip(
-  label: String,
-  active: Boolean,
-  onClick: () -> Unit,
+private fun DestructiveConfirmationModal(
+  title: String,
+  message: String,
+  confirmText: String,
+  onConfirm: () -> Unit,
+  onDismiss: () -> Unit,
 ) {
-  Row(
+  val colors = LocalProNotesColors.current
+  Box(
     modifier =
       Modifier
-        .height(28.dp)
-        .clip(RoundedCornerShape(14.dp))
-        .background(if (active) SubToolbarActiveTeal else Color(0xFF23252C))
-        .border(
-          width = 1.dp,
-          color = if (active) SubToolbarActiveCyan.copy(alpha = 0.55f) else SubToolbarBorder,
-          shape = RoundedCornerShape(14.dp),
-        )
-        .clickable(onClick = onClick)
-        .padding(horizontal = 10.dp),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(5.dp),
+        .fillMaxSize()
+        .background(Color.Black.copy(alpha = 0.5f))
+        .clickable(onClick = onDismiss),
+    contentAlignment = Alignment.Center,
   ) {
-    Box(
+    Column(
       modifier =
         Modifier
-          .size(6.dp)
-          .clip(CircleShape)
-          .background(if (active) SubToolbarActiveCyan else TextSecondaryGray),
-    )
-    Text(
-      text = label,
-      color = if (active) SubToolbarActiveCyan else TextSecondaryGray,
-      fontSize = 11.sp,
-      fontWeight = FontWeight.SemiBold,
-    )
-  }
-}
-
-@Composable
-private fun SettingsSectionCard(
-  title: String,
-  subtitle: String? = null,
-  icon: ImageVector,
-  badgeContent: (@Composable () -> Unit)? = null,
-  content: @Composable () -> Unit,
-) {
-  Column(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .shadow(8.dp, RoundedCornerShape(14.dp))
-        .clip(RoundedCornerShape(14.dp))
-        .background(PopoverBg)
-        .border(1.dp, SubToolbarBorder, RoundedCornerShape(14.dp))
-        .padding(16.dp),
-  ) {
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.SpaceBetween,
+          .widthIn(max = 400.dp)
+          .fillMaxWidth(0.9f)
+          .clip(RoundedCornerShape(18.dp))
+          .background(colors.popoverBg)
+          .border(1.dp, colors.border, RoundedCornerShape(18.dp))
+          .clickable(enabled = false) {}
+          .padding(22.dp)
+          .testTag("destructive_confirm_dialog"),
     ) {
+      Text(
+        text = title,
+        color = colors.textPrimary,
+        fontSize = 18.sp,
+        fontWeight = FontWeight.Bold,
+      )
+      Spacer(modifier = Modifier.height(8.dp))
+      Text(text = message, color = colors.textSecondary, fontSize = 14.sp)
+      Spacer(modifier = Modifier.height(22.dp))
       Row(
-        modifier = Modifier.weight(1f),
-        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(10.dp),
       ) {
         Box(
           modifier =
             Modifier
-              .size(34.dp)
-              .clip(RoundedCornerShape(9.dp))
-              .background(ToolbarNavy)
-              .border(1.dp, SubToolbarActiveCyan.copy(alpha = 0.35f), RoundedCornerShape(9.dp)),
+              .weight(1f)
+              .height(44.dp)
+              .clip(RoundedCornerShape(12.dp))
+              .background(colors.surfaceVariant)
+              .clickable(onClick = onDismiss),
           contentAlignment = Alignment.Center,
         ) {
-          Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = SubToolbarActiveCyan,
-            modifier = Modifier.size(18.dp),
-          )
+          Text("Cancel", color = colors.textPrimary, fontSize = 14.sp, fontWeight = FontWeight.Medium)
         }
-        Column {
-          Text(
-            text = title,
-            color = TextPrimaryWhite,
-            fontSize = 15.sp,
-            fontWeight = FontWeight.Bold,
-          )
-          if (subtitle != null) {
-            Text(
-              text = subtitle,
-              color = TextSecondaryGray,
-              fontSize = 11.sp,
-            )
-          }
-        }
-      }
-      if (badgeContent != null) {
         Box(
           modifier =
             Modifier
-              .size(32.dp)
-              .clip(RoundedCornerShape(8.dp))
-              .background(SubToolbarPillBg)
-              .border(1.dp, SubToolbarBorder, RoundedCornerShape(8.dp)),
+              .weight(1f)
+              .height(44.dp)
+              .clip(RoundedCornerShape(12.dp))
+              .background(DangerRed)
+              .clickable(onClick = onConfirm)
+              .testTag("confirm_destructive_action_button"),
           contentAlignment = Alignment.Center,
         ) {
-          badgeContent()
+          Text(confirmText, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
         }
       }
     }
-    Spacer(modifier = Modifier.height(12.dp))
-    content()
-  }
-}
-
-@Composable
-private fun SettingsSwitchItem(
-  title: String,
-  subtitle: String,
-  checked: Boolean,
-  onCheckedChange: (Boolean) -> Unit,
-  testTag: String,
-) {
-  Row(
-    modifier = Modifier.fillMaxWidth(),
-    horizontalArrangement = Arrangement.SpaceBetween,
-    verticalAlignment = Alignment.CenterVertically,
-  ) {
-    Column(modifier = Modifier.weight(1f).padding(end = 12.dp)) {
-      Text(
-        text = title,
-        color = TextPrimaryWhite,
-        fontSize = 13.5.sp,
-        fontWeight = FontWeight.Medium,
-      )
-      Spacer(modifier = Modifier.height(2.dp))
-      Text(
-        text = subtitle,
-        color = TextSecondaryGray,
-        fontSize = 11.5.sp,
-      )
-    }
-    Switch(
-      checked = checked,
-      onCheckedChange = onCheckedChange,
-      colors =
-        SwitchDefaults.colors(
-          checkedThumbColor = Color.White,
-          checkedTrackColor = SwitchBlue,
-          uncheckedThumbColor = Color.White,
-          uncheckedTrackColor = Color(0xFF3A3A3C),
-        ),
-      modifier = Modifier.testTag(testTag),
-    )
-  }
-}
-
-@Composable
-private fun StorageStatItem(label: String, value: String) {
-  Column(horizontalAlignment = Alignment.CenterHorizontally) {
-    Text(
-      text = value,
-      color = SubToolbarActiveCyan,
-      fontSize = 18.sp,
-      fontWeight = FontWeight.Bold,
-    )
-    Text(
-      text = label,
-      color = TextSecondaryGray,
-      fontSize = 11.sp,
-    )
   }
 }

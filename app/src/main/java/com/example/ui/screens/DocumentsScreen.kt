@@ -1,8 +1,5 @@
 package com.example.ui.screens
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -22,28 +19,42 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CreateNewFolder
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Folder
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.RestoreFromTrash
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Star
-import androidx.compose.material.icons.outlined.BookmarkBorder
-import androidx.compose.material.icons.outlined.CheckCircle
-import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Draw
-import androidx.compose.material.icons.outlined.EditOff
-import androidx.compose.material.icons.outlined.Group
-import androidx.compose.material.icons.outlined.NoteAdd
+import androidx.compose.material.icons.outlined.Folder
+import androidx.compose.material.icons.outlined.MenuBook
+import androidx.compose.material.icons.outlined.Notifications
 import androidx.compose.material.icons.outlined.PictureAsPdf
-import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.StarBorder
-import androidx.compose.material.icons.outlined.Storefront
+import androidx.compose.material.icons.outlined.ViewList
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
@@ -53,6 +64,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -63,289 +75,234 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import com.example.R
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.model.DocumentSortOption
+import com.example.model.DocumentType
+import com.example.model.DocumentsSidebarSection
+import com.example.model.FolderItem
+import com.example.model.LibraryViewMode
 import com.example.model.NotebookCoverStyle
 import com.example.model.NotebookDocument
-import com.example.model.PaperTemplate
-import com.example.model.SidebarSection
-import com.example.ui.components.SecurityVaultShieldIcon
-import com.example.ui.theme.CharcoalCover
-import com.example.ui.theme.CharcoalCoverAccent
+import com.example.ui.theme.BookCoverCharcoal
+import com.example.ui.theme.BookCoverGridLine
+import com.example.ui.theme.BookCoverGridPaper
+import com.example.ui.theme.BookCoverKraftTan
+import com.example.ui.theme.BookCoverRibbonBlue
+import com.example.ui.theme.BookCoverSpineDark
+import com.example.ui.theme.BookCoverSpineKraft
+import com.example.ui.theme.BookCoverWhiteboard
 import com.example.ui.theme.DangerRed
-import com.example.ui.theme.DocumentsMainBg
-import com.example.ui.theme.GridPaperBg
-import com.example.ui.theme.KraftSpineLight
-import com.example.ui.theme.KraftTanCover
+import com.example.ui.theme.LocalProNotesColors
 import com.example.ui.theme.NewButtonBlue
-import com.example.ui.theme.PopoverBg
-import com.example.ui.theme.PopoverDivider
-import com.example.ui.theme.PopoverInnerBg
-import com.example.ui.theme.SidebarActiveBlueIcon
-import com.example.ui.theme.SidebarActiveBluePill
-import com.example.ui.theme.SidebarDarkBg
-import com.example.ui.theme.SortPillBg
 import com.example.ui.theme.SwitchBlue
-import com.example.ui.theme.SyncOffRed
-import com.example.ui.theme.TextMutedGray
-import com.example.ui.theme.TextPrimaryWhite
-import com.example.ui.theme.TextSecondaryGray
-import com.example.ui.theme.WhiteboardBg
 
 @Composable
 fun DocumentsScreen(
-  selectedSection: SidebarSection,
   notebooks: List<NotebookDocument>,
-  sortByDateAscending: Boolean,
-  onlyDrawWithStylus: Boolean,
-  isSearchBarVisible: Boolean,
+  folders: List<FolderItem> = emptyList(),
+  currentFolderId: String? = null,
+  folderBreadcrumbs: List<FolderItem> = emptyList(),
+  selectedSection: DocumentsSidebarSection,
   searchQuery: String,
-  onSelectSection: (SidebarSection) -> Unit,
+  sortOption: DocumentSortOption,
+  libraryViewMode: LibraryViewMode = LibraryViewMode.GRID,
+  onSelectSection: (DocumentsSidebarSection) -> Unit,
+  onSearchQueryChange: (String) -> Unit,
+  onSelectSortOption: (DocumentSortOption) -> Unit,
+  onToggleLibraryViewMode: () -> Unit = {},
   onOpenNotebook: (String) -> Unit,
+  onCreateNewNotebook: () -> Unit,
+  onCreateNewWhiteboard: () -> Unit = {},
+  onImportPdfDocument: () -> Unit = {},
+  onCreateFolder: (String, Long) -> Unit = { _, _ -> },
+  onNavigateToFolder: (String?) -> Unit = {},
+  onNavigateUpFolder: () -> Unit = {},
+  onRenameFolder: (String, String) -> Unit = { _, _ -> },
+  onMoveFolder: (String, String?) -> Unit = { _, _ -> },
+  onCanMoveFolder: (String, String?) -> Boolean = { _, _ -> true },
+  onMoveFolderToTrash: (String) -> Unit = {},
+  onRestoreFolderFromTrash: (String) -> Unit = {},
+  onDeleteFolderPermanently: (String) -> Unit = {},
+  onRenameNotebook: (String, String) -> Unit = { _, _ -> },
+  onMoveNotebookToFolder: (String, String?) -> Unit = { _, _ -> },
   onToggleFavorite: (String) -> Unit,
   onMoveToTrash: (String) -> Unit,
+  onRestoreFromTrash: (String) -> Unit,
   onDeletePermanently: (String) -> Unit,
-  onOpenCreateNoteDialog: () -> Unit,
-  onCreateNewNotebook: (NotebookCoverStyle, PaperTemplate) -> Unit,
-  onImportPdfFromDevice: () -> Unit,
-  onImportSamplePdf: () -> Unit,
-  onToggleSortOrder: () -> Unit,
-  onToggleOnlyDrawWithStylus: () -> Unit,
-  onToggleSearchBar: () -> Unit,
-  onUpdateSearchQuery: (String) -> Unit,
   onOpenSettings: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  BoxWithConstraints(
-    modifier = modifier.fillMaxSize().background(DocumentsMainBg)
-  ) {
-    val isCompact = maxWidth < 580.dp
-    val isTablet = maxWidth >= 720.dp
-    val sidebarWidth =
-      when {
-        isTablet -> 228.dp
-        isCompact -> 142.dp
-        else -> 196.dp
+  val colors = LocalProNotesColors.current
+
+  // Modals for "+ New" creation menu, Folder creation, Rename, and Move
+  var showNewCreationMenu by remember { mutableStateOf(false) }
+  var showCreateFolderDialog by remember { mutableStateOf(false) }
+  var renameTarget by remember { mutableStateOf<Pair<Boolean, String>?>(null) } // (isFolder, id)
+  var renameInitialTitle by remember { mutableStateOf("") }
+  var moveTarget by remember { mutableStateOf<Pair<Boolean, String>?>(null) } // (isFolder, id)
+
+  val visibleFolders =
+    remember(folders, currentFolderId, selectedSection, searchQuery, sortOption) {
+      val base =
+        when (selectedSection) {
+          DocumentsSidebarSection.DOCUMENTS ->
+            folders.filter { !it.isTrashed && it.parentFolderId == currentFolderId }
+          DocumentsSidebarSection.TRASH ->
+            folders.filter { it.isTrashed }
+          else -> emptyList()
+        }
+      val searched =
+        if (searchQuery.isBlank()) base
+        else base.filter { it.name.contains(searchQuery.trim(), ignoreCase = true) }
+      when (sortOption) {
+        DocumentSortOption.RECENT -> searched.sortedByDescending { it.updatedAtEpochMs }
+        DocumentSortOption.NAME_ASC -> searched.sortedBy { it.name.lowercase() }
+        DocumentSortOption.FAVORITES_FIRST -> searched.sortedBy { it.name.lowercase() }
       }
+    }
+
+  val filteredNotebooks =
+    remember(notebooks, currentFolderId, selectedSection, searchQuery, sortOption) {
+      val bySection =
+        when (selectedSection) {
+          DocumentsSidebarSection.DOCUMENTS ->
+            notebooks.filter {
+              !it.isTrashed &&
+                (if (searchQuery.isNotBlank()) true else it.folderId == currentFolderId)
+            }
+          DocumentsSidebarSection.FAVORITES ->
+            notebooks.filter { !it.isTrashed && it.isFavorite }
+          DocumentsSidebarSection.SHARED ->
+            notebooks.filter { !it.isTrashed && it.isShared }
+          DocumentsSidebarSection.MARKETPLACE ->
+            notebooks.filter { !it.isTrashed && it.documentType == DocumentType.WHITEBOARD }
+          DocumentsSidebarSection.TRASH ->
+            notebooks.filter { it.isTrashed }
+        }
+      val byQuery =
+        if (searchQuery.isBlank()) {
+          bySection
+        } else {
+          val q = searchQuery.trim()
+          bySection.filter { doc ->
+            doc.title.contains(q, ignoreCase = true) ||
+              doc.pages.any { page ->
+                page.textBoxes.any { tb -> tb.text.contains(q, ignoreCase = true) } ||
+                  page.stickyNotes.any { st -> st.text.contains(q, ignoreCase = true) }
+              }
+          }
+        }
+      when (sortOption) {
+        DocumentSortOption.RECENT -> byQuery.sortedByDescending { it.updatedAtEpochMs }
+        DocumentSortOption.NAME_ASC -> byQuery.sortedBy { it.title.lowercase() }
+        DocumentSortOption.FAVORITES_FIRST ->
+          byQuery.sortedWith(compareByDescending<NotebookDocument> { it.isFavorite }.thenBy { it.title.lowercase() })
+      }
+    }
+
+  BoxWithConstraints(modifier = modifier.fillMaxSize().background(colors.background)) {
+    val isCompact = maxWidth < 680.dp
 
     Row(modifier = Modifier.fillMaxSize()) {
-      // Left Sidebar (1:1 from Screenshot 2)
-      Column(
-        modifier =
-          Modifier
-            .width(sidebarWidth)
-            .fillMaxHeight()
-            .background(SidebarDarkBg)
-            .padding(horizontal = if (isCompact) 8.dp else 14.dp, vertical = 18.dp),
-      ) {
-        Text(
-          text = "Pro Notes",
-          color = TextPrimaryWhite,
-          fontSize = if (isCompact) 18.sp else 23.sp,
-          fontWeight = FontWeight.Bold,
-          modifier = Modifier.padding(start = 6.dp, bottom = 18.dp),
-        )
+      // Left Sidebar Navigation (Tablet/Expanded)
+      if (!isCompact) {
+        Column(
+          modifier =
+            Modifier
+              .width(248.dp)
+              .fillMaxHeight()
+              .background(colors.sidebarBg)
+              .padding(horizontal = 14.dp, vertical = 20.dp),
+        ) {
+          Row(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            Image(
+              painter = painterResource(id = R.drawable.app_logo),
+              contentDescription = "Pro Notes Logo",
+              contentScale = ContentScale.Crop,
+              modifier =
+                Modifier
+                  .size(30.dp)
+                  .clip(RoundedCornerShape(8.dp))
+                  .background(Color.White),
+            )
+            Text(
+              text = "Pro Notes",
+              color = colors.textPrimary,
+              fontSize = 20.sp,
+              fontWeight = FontWeight.Bold,
+            )
+          }
 
-        SidebarNavItem(
-          label = SidebarSection.DOCUMENTS.label,
-          icon = Icons.Default.Folder,
-          isSelected = selectedSection == SidebarSection.DOCUMENTS,
-          isCompact = isCompact,
-          onClick = { onSelectSection(SidebarSection.DOCUMENTS) },
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        SidebarNavItem(
-          label = SidebarSection.FAVORITES.label,
-          icon = Icons.Outlined.BookmarkBorder,
-          isSelected = selectedSection == SidebarSection.FAVORITES,
-          isCompact = isCompact,
-          onClick = { onSelectSection(SidebarSection.FAVORITES) },
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        SidebarNavItem(
-          label = SidebarSection.SHARED.label,
-          icon = Icons.Outlined.Group,
-          isSelected = selectedSection == SidebarSection.SHARED,
-          isCompact = isCompact,
-          onClick = { onSelectSection(SidebarSection.SHARED) },
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        SidebarNavItem(
-          label = SidebarSection.MARKETPLACE.label,
-          icon = Icons.Outlined.Storefront,
-          isSelected = selectedSection == SidebarSection.MARKETPLACE,
-          isCompact = isCompact,
-          onClick = { onSelectSection(SidebarSection.MARKETPLACE) },
-        )
+          Spacer(modifier = Modifier.height(16.dp))
 
-        HorizontalDivider(
-          modifier = Modifier.padding(vertical = 14.dp),
-          thickness = 1.dp,
-          color = Color(0xFF26272B),
-        )
+          DocumentsSidebarSection.entries.forEach { section ->
+            val icon =
+              when (section) {
+                DocumentsSidebarSection.DOCUMENTS -> Icons.Outlined.Folder
+                DocumentsSidebarSection.FAVORITES -> Icons.Outlined.StarBorder
+                DocumentsSidebarSection.SHARED -> Icons.Outlined.Description
+                DocumentsSidebarSection.MARKETPLACE -> Icons.Outlined.Draw
+                DocumentsSidebarSection.TRASH -> Icons.Default.Delete
+              }
+            SidebarNavItem(
+              icon = icon,
+              label = section.label,
+              selected = selectedSection == section,
+              onClick = { onSelectSection(section) },
+              testTag = "sidebar_section_${section.name.lowercase()}",
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+          }
 
-        SidebarNavItem(
-          label = SidebarSection.TRASH.label,
-          icon = Icons.Outlined.DeleteOutline,
-          isSelected = selectedSection == SidebarSection.TRASH,
-          isCompact = isCompact,
-          onClick = { onSelectSection(SidebarSection.TRASH) },
-        )
+          Spacer(modifier = Modifier.weight(1f))
 
-        Spacer(modifier = Modifier.weight(1f))
+          HorizontalDivider(color = colors.divider, modifier = Modifier.padding(vertical = 8.dp))
 
-        SidebarNavItem(
-          label = "Settings",
-          icon = Icons.Outlined.Settings,
-          isSelected = false,
-          isCompact = isCompact,
-          onClick = onOpenSettings,
-        )
+          val activeDocCount = notebooks.count { !it.isTrashed }
+          val activeFolderCount = folders.count { !it.isTrashed }
+          Text(
+            text = "$activeDocCount Documents • $activeFolderCount Folders",
+            color = colors.textSecondary,
+            fontSize = 11.5.sp,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+          )
+        }
       }
 
-      // Vertical separator line
-      Box(
-        modifier =
-          Modifier
-            .width(1.dp)
-            .fillMaxHeight()
-            .background(Color(0xFF26272B))
-      )
-
-      // Right Main Documents Content Area
-      val displayedNotebooks =
-        remember(notebooks, selectedSection, sortByDateAscending, searchQuery) {
-          val sectionFiltered =
-            when (selectedSection) {
-              SidebarSection.DOCUMENTS -> notebooks.filter { !it.isTrashed }
-              SidebarSection.FAVORITES -> notebooks.filter { it.isFavorite && !it.isTrashed }
-              SidebarSection.TRASH -> notebooks.filter { it.isTrashed }
-              else -> notebooks.filter { !it.isTrashed }
-            }
-          val queryFiltered =
-            if (searchQuery.isBlank()) sectionFiltered
-            else sectionFiltered.filter { it.title.contains(searchQuery, ignoreCase = true) }
-          if (sortByDateAscending) queryFiltered.reversed() else queryFiltered
-        }
-
+      // Main Right Content Area
       Column(
         modifier =
           Modifier
             .weight(1f)
             .fillMaxHeight()
-            .background(DocumentsMainBg)
-            .padding(horizontal = if (isCompact) 14.dp else 28.dp, vertical = 12.dp),
+            .background(colors.background)
+            .padding(
+              horizontal = if (isCompact) 14.dp else 28.dp,
+              vertical = if (isCompact) 12.dp else 20.dp,
+            ),
       ) {
-        // Top Utility Bar (Stylus Mode toggle on left, Search & Settings on right)
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Row(
-            modifier =
-              Modifier
-                .clip(RoundedCornerShape(10.dp))
-                .clickable(onClick = onToggleOnlyDrawWithStylus)
-                .padding(horizontal = 6.dp, vertical = 4.dp)
-                .testTag("stylus_mode_status_toggle"),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-          ) {
-            Icon(
-              imageVector = if (onlyDrawWithStylus) Icons.Outlined.Draw else Icons.Outlined.EditOff,
-              contentDescription = "Stylus mode",
-              tint = if (onlyDrawWithStylus) Color(0xFF34C759) else SyncOffRed,
-              modifier = Modifier.size(18.dp),
-            )
-            Text(
-              text = if (onlyDrawWithStylus) "Stylus Only (Finger Zoom)" else "Stylus + Touch Draw",
-              color = TextSecondaryGray,
-              fontSize = 11.sp,
-              fontWeight = FontWeight.Medium,
-            )
-          }
-
-          Row(
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-          ) {
-            Icon(
-              imageVector = Icons.Outlined.Search,
-              contentDescription = "Search documents",
-              tint = if (isSearchBarVisible) SwitchBlue else TextPrimaryWhite.copy(alpha = 0.85f),
-              modifier =
-                Modifier
-                  .size(20.dp)
-                  .clickable(onClick = onToggleSearchBar)
-                  .testTag("documents_search_button"),
-            )
-            Icon(
-              imageVector = Icons.Outlined.Settings,
-              contentDescription = "Settings",
-              tint = TextPrimaryWhite.copy(alpha = 0.85f),
-              modifier =
-                Modifier
-                  .size(20.dp)
-                  .clickable(onClick = onOpenSettings)
-                  .testTag("documents_settings_button"),
-            )
-          }
-        }
-
-        AnimatedVisibility(
-          visible = isSearchBarVisible,
-          enter = fadeIn(),
-          exit = fadeOut(),
-        ) {
-          OutlinedTextField(
-            value = searchQuery,
-            onValueChange = onUpdateSearchQuery,
-            placeholder = {
-              Text("Search notebooks & PDFs...", color = TextSecondaryGray, fontSize = 12.sp)
-            },
-            trailingIcon = {
-              if (searchQuery.isNotEmpty()) {
-                Icon(
-                  imageVector = Icons.Default.Close,
-                  contentDescription = "Clear search",
-                  tint = TextSecondaryGray,
-                  modifier = Modifier.size(16.dp).clickable { onUpdateSearchQuery("") },
-                )
-              }
-            },
-            singleLine = true,
-            colors =
-              OutlinedTextFieldDefaults.colors(
-                focusedTextColor = TextPrimaryWhite,
-                unfocusedTextColor = TextPrimaryWhite,
-                focusedBorderColor = SwitchBlue,
-                unfocusedBorderColor = PopoverDivider,
-                focusedContainerColor = PopoverInnerBg,
-                unfocusedContainerColor = PopoverInnerBg,
-              ),
-            modifier =
-              Modifier
-                .fillMaxWidth()
-                .padding(top = 8.dp)
-                .testTag("documents_search_input"),
-          )
-        }
-
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // Header Row: "Documents" title + "+ New v", "Import PDF", "Date v", Checkmark icon
+        // Top Header: Section Title | Search Bar | + New Button | Settings Gear
         Row(
           modifier = Modifier.fillMaxWidth(),
           horizontalArrangement = Arrangement.SpaceBetween,
@@ -353,297 +310,410 @@ fun DocumentsScreen(
         ) {
           Text(
             text = selectedSection.label,
-            color = TextPrimaryWhite,
-            fontSize = if (isCompact) 21.sp else 28.sp,
+            color = colors.textPrimary,
+            fontSize = if (isCompact) 22.sp else 26.sp,
             fontWeight = FontWeight.Bold,
           )
 
           Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
           ) {
-            if (!isCompact) {
-              Row(
-                modifier =
-                  Modifier
-                    .height(30.dp)
-                    .clip(RoundedCornerShape(15.dp))
-                    .background(SortPillBg)
-                    .border(1.dp, Color(0xFF3E8BF7).copy(alpha = 0.55f), RoundedCornerShape(15.dp))
-                    .clickable(onClick = onImportPdfFromDevice)
-                    .padding(horizontal = 12.dp)
-                    .testTag("documents_import_pdf_button"),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
-              ) {
-                Icon(
-                  imageVector = Icons.Outlined.PictureAsPdf,
-                  contentDescription = null,
-                  tint = Color(0xFF67C8EB),
-                  modifier = Modifier.size(14.dp),
+            // Search Bar
+            Row(
+              modifier =
+                Modifier
+                  .width(if (isCompact) 160.dp else 280.dp)
+                  .height(38.dp)
+                  .clip(RoundedCornerShape(10.dp))
+                  .background(colors.surfaceVariant)
+                  .border(1.dp, colors.border, RoundedCornerShape(10.dp))
+                  .padding(horizontal = 10.dp),
+              verticalAlignment = Alignment.CenterVertically,
+            ) {
+              Icon(
+                imageVector = Icons.Default.Search,
+                contentDescription = "Search",
+                tint = colors.textSecondary,
+                modifier = Modifier.size(17.dp),
+              )
+              Spacer(modifier = Modifier.width(6.dp))
+              Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                if (searchQuery.isEmpty()) {
+                  Text(
+                    text = "Search notes & folders...",
+                    color = colors.textSecondary,
+                    fontSize = 12.5.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                  )
+                }
+                BasicTextField(
+                  value = searchQuery,
+                  onValueChange = onSearchQueryChange,
+                  singleLine = true,
+                  textStyle =
+                    TextStyle(
+                      color = colors.textPrimary,
+                      fontSize = 13.sp,
+                    ),
+                  modifier = Modifier.fillMaxWidth().testTag("documents_search_input"),
                 )
-                Text(
-                  text = "Import PDF",
-                  color = TextPrimaryWhite,
-                  fontSize = 12.sp,
-                  fontWeight = FontWeight.Medium,
+              }
+              if (searchQuery.isNotEmpty()) {
+                Icon(
+                  imageVector = Icons.Default.Close,
+                  contentDescription = "Clear search",
+                  tint = colors.textSecondary,
+                  modifier =
+                    Modifier
+                      .size(16.dp)
+                      .clickable { onSearchQueryChange("") }
+                      .testTag("clear_search_button"),
                 )
               }
             }
 
-            var showNewMenu by remember { mutableStateOf(false) }
+            // "+ New" Dropdown Trigger Button
             Box {
               Row(
                 modifier =
                   Modifier
-                    .height(30.dp)
-                    .clip(RoundedCornerShape(15.dp))
+                    .height(38.dp)
+                    .clip(RoundedCornerShape(10.dp))
                     .background(NewButtonBlue)
-                    .clickable { showNewMenu = true }
+                    .clickable { showNewCreationMenu = true }
                     .padding(horizontal = 12.dp)
-                    .testTag("documents_new_button"),
+                    .testTag("top_new_notebook_button"),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp),
               ) {
                 Icon(
                   imageVector = Icons.Default.Add,
-                  contentDescription = null,
-                  tint = TextPrimaryWhite,
-                  modifier = Modifier.size(15.dp),
+                  contentDescription = "Create New",
+                  tint = Color.White,
+                  modifier = Modifier.size(17.dp),
                 )
-                Text(
-                  text = "New",
-                  color = TextPrimaryWhite,
-                  fontSize = 12.sp,
-                  fontWeight = FontWeight.SemiBold,
-                )
-                Icon(
-                  imageVector = Icons.Default.KeyboardArrowDown,
-                  contentDescription = null,
-                  tint = TextPrimaryWhite,
-                  modifier = Modifier.size(14.dp),
-                )
+                if (!isCompact) {
+                  Text(
+                    text = "New",
+                    color = Color.White,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                  )
+                }
               }
 
-              DropdownMenu(
-                expanded = showNewMenu,
-                onDismissRequest = { showNewMenu = false },
-                modifier = Modifier.background(PopoverBg),
-              ) {
-                DropdownMenuItem(
-                  text = { Text("Notebook Studio (Custom...)", color = Color(0xFF67C8EB), fontSize = 13.sp, fontWeight = FontWeight.SemiBold) },
-                  onClick = {
-                    showNewMenu = false
-                    onOpenCreateNoteDialog()
-                  },
-                )
-                DropdownMenuItem(
-                  text = { Text("Import PDF from Device...", color = TextPrimaryWhite, fontSize = 13.sp) },
-                  onClick = {
-                    showNewMenu = false
-                    onImportPdfFromDevice()
-                  },
-                )
-                DropdownMenuItem(
-                  text = { Text("Import Sample Study PDF", color = TextPrimaryWhite, fontSize = 13.sp) },
-                  onClick = {
-                    showNewMenu = false
-                    onImportSamplePdf()
-                  },
-                )
-                DropdownMenuItem(
-                  text = { Text("Quick Blank Notebook", color = TextPrimaryWhite, fontSize = 13.sp) },
-                  onClick = {
-                    showNewMenu = false
-                    onCreateNewNotebook(NotebookCoverStyle.KRAFT_TAN, PaperTemplate.BLANK)
-                  },
-                )
-                DropdownMenuItem(
-                  text = { Text("Ruled Notebook", color = TextPrimaryWhite, fontSize = 13.sp) },
-                  onClick = {
-                    showNewMenu = false
-                    onCreateNewNotebook(NotebookCoverStyle.CHARCOAL_DARK, PaperTemplate.RULED)
-                  },
-                )
-                DropdownMenuItem(
-                  text = { Text("Cornell Notes Notebook", color = TextPrimaryWhite, fontSize = 13.sp) },
-                  onClick = {
-                    showNewMenu = false
-                    onCreateNewNotebook(NotebookCoverStyle.KRAFT_TAN, PaperTemplate.CORNELL)
-                  },
-                )
-                DropdownMenuItem(
-                  text = { Text("Whiteboard", color = TextPrimaryWhite, fontSize = 13.sp) },
-                  onClick = {
-                    showNewMenu = false
-                    onCreateNewNotebook(NotebookCoverStyle.WHITEBOARD, PaperTemplate.BLANK)
-                  },
-                )
-              }
+              NewCreationDropdownMenu(
+                expanded = showNewCreationMenu,
+                onDismiss = { showNewCreationMenu = false },
+                onCreateNotebook = {
+                  showNewCreationMenu = false
+                  onCreateNewNotebook()
+                },
+                onCreateWhiteboard = {
+                  showNewCreationMenu = false
+                  onCreateNewWhiteboard()
+                },
+                onImportDocument = {
+                  showNewCreationMenu = false
+                  onImportPdfDocument()
+                },
+                onCreateFolder = {
+                  showNewCreationMenu = false
+                  showCreateFolderDialog = true
+                },
+              )
             }
 
-            // "Date v" pill
-            Row(
+            // Grid / List View Toggle
+            Box(
               modifier =
                 Modifier
-                  .height(30.dp)
-                  .clip(RoundedCornerShape(15.dp))
-                  .background(SortPillBg)
-                  .clickable(onClick = onToggleSortOrder)
-                  .padding(horizontal = 12.dp)
-                  .testTag("documents_sort_date_button"),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(4.dp),
+                  .size(38.dp)
+                  .clip(RoundedCornerShape(10.dp))
+                  .background(colors.surfaceVariant)
+                  .border(1.dp, colors.border, RoundedCornerShape(10.dp))
+                  .clickable(onClick = onToggleLibraryViewMode)
+                  .testTag("library_view_mode_toggle"),
+              contentAlignment = Alignment.Center,
             ) {
-              Text(
-                text = "Date",
-                color = TextPrimaryWhite.copy(alpha = 0.9f),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-              )
               Icon(
-                imageVector = Icons.Default.KeyboardArrowDown,
-                contentDescription = null,
-                tint = TextSecondaryGray,
-                modifier = Modifier.size(14.dp),
+                imageVector =
+                  if (libraryViewMode == LibraryViewMode.GRID) Icons.Outlined.ViewList
+                  else Icons.Default.GridView,
+                contentDescription = "Toggle Grid or List View",
+                tint = colors.textPrimary,
+                modifier = Modifier.size(19.dp),
               )
             }
 
+            // Settings Button
+            Box(
+              modifier =
+                Modifier
+                  .size(38.dp)
+                  .clip(RoundedCornerShape(10.dp))
+                  .background(colors.surfaceVariant)
+                  .border(1.dp, colors.border, RoundedCornerShape(10.dp))
+                  .clickable(onClick = onOpenSettings)
+                  .testTag("open_settings_button"),
+              contentAlignment = Alignment.Center,
+            ) {
+              Icon(
+                imageVector = Icons.Outlined.Settings,
+                contentDescription = "Settings",
+                tint = colors.textPrimary,
+                modifier = Modifier.size(20.dp),
+              )
+            }
+          }
+        }
+
+        // Compact Section Tabs on Phones / Narrow Windows
+        if (isCompact) {
+          Spacer(modifier = Modifier.height(10.dp))
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+          ) {
+            DocumentsSidebarSection.entries.forEach { section ->
+              val isSelected = selectedSection == section
+              Box(
+                modifier =
+                  Modifier
+                    .weight(1f)
+                    .height(32.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(if (isSelected) colors.accentBlue else colors.surfaceVariant)
+                    .clickable { onSelectSection(section) }
+                    .testTag("compact_section_${section.name.lowercase()}"),
+                contentAlignment = Alignment.Center,
+              ) {
+                Text(
+                  text = section.label,
+                  color = if (isSelected) Color.White else colors.textSecondary,
+                  fontSize = 11.5.sp,
+                  fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                  maxLines = 1,
+                )
+              }
+            }
+          }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Breadcrumb Navigation + Sort Selector Row
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          // Clickable Folder Breadcrumb Trail (Documents > Folder > Subfolder)
+          Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            modifier = Modifier.weight(1f),
+          ) {
+            if (selectedSection == DocumentsSidebarSection.DOCUMENTS && currentFolderId != null) {
+              Box(
+                modifier =
+                  Modifier
+                    .size(28.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(colors.surfaceVariant)
+                    .clickable(onClick = onNavigateUpFolder)
+                    .testTag("folder_up_button"),
+                contentAlignment = Alignment.Center,
+              ) {
+                Icon(
+                  imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                  contentDescription = "Up to parent folder",
+                  tint = colors.textPrimary,
+                  modifier = Modifier.size(16.dp),
+                )
+              }
+              Spacer(modifier = Modifier.width(4.dp))
+            }
+
+            Text(
+              text = selectedSection.label,
+              color =
+                if (currentFolderId == null) colors.textPrimary else colors.accentBlue,
+              fontSize = 13.sp,
+              fontWeight = FontWeight.SemiBold,
+              modifier =
+                Modifier
+                  .clip(RoundedCornerShape(4.dp))
+                  .clickable(enabled = currentFolderId != null) { onNavigateToFolder(null) }
+                  .padding(horizontal = 4.dp, vertical = 2.dp)
+                  .testTag("breadcrumb_root"),
+            )
+
+            folderBreadcrumbs.forEach { crumb ->
+              Icon(
+                imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                contentDescription = null,
+                tint = colors.textSecondary,
+                modifier = Modifier.size(16.dp),
+              )
+              val isCurrentCrumb = crumb.id == currentFolderId
+              Text(
+                text = crumb.name,
+                color = if (isCurrentCrumb) colors.textPrimary else colors.accentBlue,
+                fontSize = 13.sp,
+                fontWeight = if (isCurrentCrumb) FontWeight.Bold else FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier =
+                  Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable(enabled = !isCurrentCrumb) { onNavigateToFolder(crumb.id) }
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                    .testTag("breadcrumb_folder_${crumb.id}"),
+              )
+            }
+          }
+
+          // Sort Option Selector
+          Row(
+            modifier =
+              Modifier
+                .clip(RoundedCornerShape(8.dp))
+                .background(colors.surfaceVariant)
+                .clickable {
+                  val entries = DocumentSortOption.entries
+                  val nextOption = entries[(entries.indexOf(sortOption) + 1) % entries.size]
+                  onSelectSortOption(nextOption)
+                }
+                .padding(horizontal = 10.dp, vertical = 6.dp)
+                .testTag("sort_selector_pill"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+          ) {
+            Text(
+              text = sortOption.label,
+              color = colors.textSecondary,
+              fontSize = 12.sp,
+              fontWeight = FontWeight.Medium,
+            )
             Icon(
-              imageVector = Icons.Outlined.CheckCircle,
-              contentDescription = "Select documents",
-              tint = TextSecondaryGray,
-              modifier = Modifier.size(20.dp),
+              imageVector = Icons.Default.KeyboardArrowDown,
+              contentDescription = "Cycle sort order",
+              tint = colors.textSecondary,
+              modifier = Modifier.size(16.dp),
             )
           }
         }
 
-        Spacer(modifier = Modifier.height(18.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
-        if (displayedNotebooks.isEmpty()) {
-          // Clean, local-first Goodnotes 6 Empty State (Zero pre-made notes)
-          Box(
+        // Main Library View (Grid or List)
+        if (libraryViewMode == LibraryViewMode.GRID) {
+          LazyVerticalGrid(
+            columns = GridCells.Adaptive(minSize = if (isCompact) 142.dp else 160.dp),
+            contentPadding = PaddingValues(bottom = 32.dp),
+            horizontalArrangement = Arrangement.spacedBy(if (isCompact) 14.dp else 22.dp),
+            verticalArrangement = Arrangement.spacedBy(22.dp),
             modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center,
           ) {
-            Column(
-              modifier =
-                Modifier
-                  .width(380.dp)
-                  .clip(RoundedCornerShape(18.dp))
-                  .background(PopoverBg)
-                  .border(1.dp, PopoverDivider, RoundedCornerShape(18.dp))
-                  .padding(24.dp),
-              horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-              Icon(
-                imageVector = Icons.Outlined.NoteAdd,
-                contentDescription = null,
-                tint = Color(0xFF67C8EB),
-                modifier = Modifier.size(44.dp),
-              )
-              Spacer(modifier = Modifier.height(12.dp))
-              Text(
-                text =
-                  if (selectedSection == SidebarSection.TRASH) "Trash is Empty"
-                  else "Your Local Library is Ready",
-                color = TextPrimaryWhite,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold,
-              )
-              Spacer(modifier = Modifier.height(6.dp))
-              Text(
-                text =
-                  if (selectedSection == SidebarSection.TRASH) {
-                    "Deleted notebooks will appear here before permanent removal."
-                  } else {
-                    "Create a new notebook, whiteboard, or import a PDF. All notes are automatically saved locally on your device."
-                  },
-                color = TextSecondaryGray,
-                fontSize = 12.5.sp,
-                textAlign = TextAlign.Center,
-              )
-              if (selectedSection != SidebarSection.TRASH) {
-                Spacer(modifier = Modifier.height(18.dp))
-                Row(
-                  modifier = Modifier.fillMaxWidth(),
-                  horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                  Row(
-                    modifier =
-                      Modifier
-                        .weight(1f)
-                        .height(40.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(NewButtonBlue)
-                        .clickable {
-                          onCreateNewNotebook(NotebookCoverStyle.KRAFT_TAN, PaperTemplate.RULED)
-                        }
-                        .testTag("empty_state_quick_notebook_button"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center,
-                  ) {
-                    Icon(
-                      imageVector = Icons.Default.Add,
-                      contentDescription = null,
-                      tint = Color.White,
-                      modifier = Modifier.size(16.dp),
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                      text = "New Notebook",
-                      color = Color.White,
-                      fontSize = 12.5.sp,
-                      fontWeight = FontWeight.SemiBold,
-                    )
-                  }
-
-                  Row(
-                    modifier =
-                      Modifier
-                        .weight(1f)
-                        .height(40.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(SortPillBg)
-                        .border(1.dp, SwitchBlue, RoundedCornerShape(10.dp))
-                        .clickable(onClick = onImportPdfFromDevice)
-                        .testTag("empty_state_import_pdf_button"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Center,
-                  ) {
-                    Icon(
-                      imageVector = Icons.Outlined.PictureAsPdf,
-                      contentDescription = null,
-                      tint = Color(0xFF67C8EB),
-                      modifier = Modifier.size(16.dp),
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                      text = "Import PDF",
-                      color = TextPrimaryWhite,
-                      fontSize = 12.5.sp,
-                      fontWeight = FontWeight.Medium,
-                    )
-                  }
+            // 1. "+ New..." Dashed Creation Card in Documents Root or Folder
+            if (selectedSection == DocumentsSidebarSection.DOCUMENTS) {
+              item(key = "new_notebook_card") {
+                Box {
+                  NewNotebookDashedCard(
+                    onClick = { showNewCreationMenu = true },
+                  )
                 }
               }
             }
-          }
-        } else {
-          // Documents Grid (1:1 Notebook & Whiteboard Covers + PDF Thumbnails)
-          LazyVerticalGrid(
-            columns = GridCells.Adaptive(minSize = if (isCompact) 112.dp else 138.dp),
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(bottom = 24.dp),
-            horizontalArrangement = Arrangement.spacedBy(if (isCompact) 14.dp else 22.dp),
-            verticalArrangement = Arrangement.spacedBy(22.dp),
-          ) {
-            items(displayedNotebooks, key = { it.id }) { doc ->
-              NotebookGridItem(
+
+            // 2. Folder Cards
+            items(visibleFolders, key = { "folder_${it.id}" }) { folder ->
+              val childCount =
+                folders.count { !it.isTrashed && it.parentFolderId == folder.id } +
+                  notebooks.count { !it.isTrashed && it.folderId == folder.id }
+              FolderGridCard(
+                folder = folder,
+                itemCount = childCount,
+                onOpenFolder = {
+                  if (!folder.isTrashed) {
+                    onNavigateToFolder(folder.id)
+                  }
+                },
+                onRenameFolder = {
+                  renameTarget = true to folder.id
+                  renameInitialTitle = folder.name
+                },
+                onMoveFolder = {
+                  moveTarget = true to folder.id
+                },
+                onMoveToTrash = { onMoveFolderToTrash(folder.id) },
+                onRestoreFromTrash = { onRestoreFolderFromTrash(folder.id) },
+                onDeletePermanently = { onDeleteFolderPermanently(folder.id) },
+              )
+            }
+
+            // 3. Notebook & Whiteboard Cards
+            items(filteredNotebooks, key = { it.id }) { doc ->
+              NotebookGridCard(
                 document = doc,
                 onClick = { onOpenNotebook(doc.id) },
+                onRename = {
+                  renameTarget = false to doc.id
+                  renameInitialTitle = doc.title
+                },
+                onMoveToFolder = {
+                  moveTarget = false to doc.id
+                },
                 onToggleFavorite = { onToggleFavorite(doc.id) },
                 onMoveToTrash = { onMoveToTrash(doc.id) },
+                onRestoreFromTrash = { onRestoreFromTrash(doc.id) },
+                onDeletePermanently = { onDeletePermanently(doc.id) },
+              )
+            }
+          }
+        } else {
+          // LIST VIEW MODE
+          LazyColumn(
+            contentPadding = PaddingValues(bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxSize(),
+          ) {
+            items(visibleFolders, key = { "list_folder_${it.id}" }) { folder ->
+              val childCount =
+                folders.count { !it.isTrashed && it.parentFolderId == folder.id } +
+                  notebooks.count { !it.isTrashed && it.folderId == folder.id }
+              FolderListRow(
+                folder = folder,
+                itemCount = childCount,
+                onOpenFolder = {
+                  if (!folder.isTrashed) onNavigateToFolder(folder.id)
+                },
+                onRenameFolder = {
+                  renameTarget = true to folder.id
+                  renameInitialTitle = folder.name
+                },
+                onMoveFolder = { moveTarget = true to folder.id },
+                onMoveToTrash = { onMoveFolderToTrash(folder.id) },
+                onRestoreFromTrash = { onRestoreFolderFromTrash(folder.id) },
+                onDeletePermanently = { onDeleteFolderPermanently(folder.id) },
+              )
+            }
+
+            items(filteredNotebooks, key = { "list_doc_${it.id}" }) { doc ->
+              NotebookListRow(
+                document = doc,
+                onClick = { onOpenNotebook(doc.id) },
+                onRename = {
+                  renameTarget = false to doc.id
+                  renameInitialTitle = doc.title
+                },
+                onMoveToFolder = { moveTarget = false to doc.id },
+                onToggleFavorite = { onToggleFavorite(doc.id) },
+                onMoveToTrash = { onMoveToTrash(doc.id) },
+                onRestoreFromTrash = { onRestoreFromTrash(doc.id) },
                 onDeletePermanently = { onDeletePermanently(doc.id) },
               )
             }
@@ -651,348 +721,413 @@ fun DocumentsScreen(
         }
       }
     }
+
+    // Create Folder Modal Dialog
+    if (showCreateFolderDialog) {
+      CreateFolderModalDialog(
+        onConfirm = { name, colorArgb ->
+          onCreateFolder(name, colorArgb)
+          showCreateFolderDialog = false
+        },
+        onDismiss = { showCreateFolderDialog = false },
+      )
+    }
+
+    // Rename Folder / Notebook Modal Dialog
+    renameTarget?.let { (isFolder, targetId) ->
+      RenameItemModalDialog(
+        titleLabel = if (isFolder) "Rename Folder" else "Rename Document",
+        initialValue = renameInitialTitle,
+        onConfirm = { newName ->
+          if (isFolder) onRenameFolder(targetId, newName)
+          else onRenameNotebook(targetId, newName)
+          renameTarget = null
+        },
+        onDismiss = { renameTarget = null },
+      )
+    }
+
+    // Move to Folder Modal Dialog
+    moveTarget?.let { (isFolder, targetId) ->
+      val availableDestinations =
+        folders.filter { candidate ->
+          !candidate.isTrashed &&
+            (!isFolder || onCanMoveFolder(targetId, candidate.id))
+        }
+      MoveToFolderModalDialog(
+        isMovingFolder = isFolder,
+        folders = availableDestinations,
+        onSelectDestination = { destFolderId ->
+          if (isFolder) onMoveFolder(targetId, destFolderId)
+          else onMoveNotebookToFolder(targetId, destFolderId)
+          moveTarget = null
+        },
+        onDismiss = { moveTarget = null },
+      )
+    }
+  }
+}
+
+/**
+ * Goodnotes-style "+ New" Creation Menu with 4 structured options:
+ * 1. Notebook
+ * 2. Whiteboard
+ * 3. Import document (PDF)
+ * 4. Folder
+ */
+@Composable
+private fun NewCreationDropdownMenu(
+  expanded: Boolean,
+  onDismiss: () -> Unit,
+  onCreateNotebook: () -> Unit,
+  onCreateWhiteboard: () -> Unit,
+  onImportDocument: () -> Unit,
+  onCreateFolder: () -> Unit,
+) {
+  val colors = LocalProNotesColors.current
+  DropdownMenu(
+    expanded = expanded,
+    onDismissRequest = onDismiss,
+    modifier =
+      Modifier
+        .width(230.dp)
+        .background(colors.popoverBg)
+        .testTag("new_creation_dropdown_menu"),
+  ) {
+    DropdownMenuItem(
+      text = {
+        Column {
+          Text(
+            "Notebook",
+            color = colors.textPrimary,
+            fontSize = 13.5.sp,
+            fontWeight = FontWeight.SemiBold,
+          )
+          Text(
+            "Templates, covers & paper sizes",
+            color = colors.textSecondary,
+            fontSize = 10.5.sp,
+          )
+        }
+      },
+      leadingIcon = {
+        Icon(
+          imageVector = Icons.Outlined.MenuBook,
+          contentDescription = null,
+          tint = NewButtonBlue,
+        )
+      },
+      onClick = onCreateNotebook,
+      modifier = Modifier.testTag("new_menu_notebook_option"),
+    )
+
+    DropdownMenuItem(
+      text = {
+        Column {
+          Text(
+            "Whiteboard",
+            color = colors.textPrimary,
+            fontSize = 13.5.sp,
+            fontWeight = FontWeight.SemiBold,
+          )
+          Text(
+            "Infinite canvas for diagrams & mindmaps",
+            color = colors.textSecondary,
+            fontSize = 10.5.sp,
+          )
+        }
+      },
+      leadingIcon = {
+        Icon(
+          imageVector = Icons.Outlined.Draw,
+          contentDescription = null,
+          tint = Color(0xFF00ACC1),
+        )
+      },
+      onClick = onCreateWhiteboard,
+      modifier = Modifier.testTag("new_menu_whiteboard_option"),
+    )
+
+    DropdownMenuItem(
+      text = {
+        Column {
+          Text(
+            "Import document",
+            color = colors.textPrimary,
+            fontSize = 13.5.sp,
+            fontWeight = FontWeight.SemiBold,
+          )
+          Text(
+            "Annotate multi-page PDF files",
+            color = colors.textSecondary,
+            fontSize = 10.5.sp,
+          )
+        }
+      },
+      leadingIcon = {
+        Icon(
+          imageVector = Icons.Outlined.PictureAsPdf,
+          contentDescription = null,
+          tint = Color(0xFFFF7043),
+        )
+      },
+      onClick = onImportDocument,
+      modifier = Modifier.testTag("new_menu_import_pdf_option"),
+    )
+
+    HorizontalDivider(color = colors.divider)
+
+    DropdownMenuItem(
+      text = {
+        Column {
+          Text(
+            "Folder",
+            color = colors.textPrimary,
+            fontSize = 13.5.sp,
+            fontWeight = FontWeight.SemiBold,
+          )
+          Text(
+            "Organize notebooks into folders",
+            color = colors.textSecondary,
+            fontSize = 10.5.sp,
+          )
+        }
+      },
+      leadingIcon = {
+        Icon(
+          imageVector = Icons.Default.CreateNewFolder,
+          contentDescription = null,
+          tint = Color(0xFFFFCA28),
+        )
+      },
+      onClick = onCreateFolder,
+      modifier = Modifier.testTag("new_menu_folder_option"),
+    )
   }
 }
 
 @Composable
 private fun SidebarNavItem(
-  label: String,
   icon: ImageVector,
-  isSelected: Boolean,
-  isCompact: Boolean,
+  label: String,
+  selected: Boolean,
   onClick: () -> Unit,
+  testTag: String,
 ) {
+  val colors = LocalProNotesColors.current
   Row(
     modifier =
       Modifier
         .fillMaxWidth()
-        .height(38.dp)
-        .clip(RoundedCornerShape(8.dp))
-        .background(if (isSelected) SidebarActiveBluePill else Color.Transparent)
+        .height(44.dp)
+        .clip(RoundedCornerShape(10.dp))
+        .background(if (selected) colors.sidebarSelectedBg else Color.Transparent)
         .clickable(onClick = onClick)
-        .padding(horizontal = 10.dp)
-        .testTag("sidebar_item_${label.lowercase()}"),
+        .padding(horizontal = 12.dp)
+        .testTag(testTag),
     verticalAlignment = Alignment.CenterVertically,
   ) {
     Icon(
       imageVector = icon,
       contentDescription = label,
-      tint = if (isSelected) SidebarActiveBlueIcon else TextSecondaryGray,
-      modifier = Modifier.size(18.dp),
+      tint = if (selected) colors.accentBlue else colors.textSecondary,
+      modifier = Modifier.size(20.dp),
     )
-    Spacer(modifier = Modifier.width(10.dp))
+    Spacer(modifier = Modifier.width(12.dp))
     Text(
       text = label,
-      color = if (isSelected) TextPrimaryWhite else TextPrimaryWhite.copy(alpha = 0.85f),
-      fontSize = if (isCompact) 12.sp else 13.5.sp,
-      fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
+      color = if (selected) colors.textPrimary else colors.textSecondary,
+      fontSize = 14.sp,
+      fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
     )
   }
 }
 
 @Composable
-private fun NotebookGridItem(
-  document: NotebookDocument,
+private fun NewNotebookDashedCard(
   onClick: () -> Unit,
-  onToggleFavorite: () -> Unit,
-  onMoveToTrash: () -> Unit,
-  onDeletePermanently: () -> Unit,
 ) {
-  var showCardMenu by remember { mutableStateOf(false) }
-
+  val colors = LocalProNotesColors.current
   Column(
+    horizontalAlignment = Alignment.CenterHorizontally,
     modifier =
       Modifier
-        .fillMaxWidth()
+        .width(150.dp)
         .clickable(onClick = onClick)
-        .testTag("notebook_card_${document.id}"),
-    horizontalAlignment = Alignment.CenterHorizontally,
+        .testTag("create_new_notebook_card"),
   ) {
-    val isLandscapeCard =
-      document.coverStyle == NotebookCoverStyle.WHITEBOARD ||
-        document.coverStyle == NotebookCoverStyle.HANDWRITTEN_NOTES
-
     Box(
       modifier =
         Modifier
-          .height(138.dp)
-          .fillMaxWidth(),
-      contentAlignment = Alignment.BottomCenter,
+          .width(142.dp)
+          .height(186.dp),
+      contentAlignment = Alignment.Center,
     ) {
-      val cardHeight = if (isLandscapeCard && !document.isImportedPdf) 104.dp else 134.dp
+      Canvas(modifier = Modifier.fillMaxSize()) {
+        val dashEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 12f), 0f)
+        drawRoundRect(
+          color = colors.textSecondary.copy(alpha = 0.45f),
+          size = size,
+          cornerRadius = CornerRadius(12.dp.toPx(), 12.dp.toPx()),
+          style = Stroke(width = 2.dp.toPx(), pathEffect = dashEffect),
+        )
+      }
+      Icon(
+        imageVector = Icons.Default.Add,
+        contentDescription = "Create New",
+        tint = NewButtonBlue,
+        modifier = Modifier.size(34.dp),
+      )
+    }
+
+    Spacer(modifier = Modifier.height(10.dp))
+
+    Text(
+      text = "New...",
+      color = NewButtonBlue,
+      fontSize = 13.5.sp,
+      fontWeight = FontWeight.Medium,
+    )
+  }
+}
+
+@Composable
+private fun FolderGridCard(
+  folder: FolderItem,
+  itemCount: Int,
+  onOpenFolder: () -> Unit,
+  onRenameFolder: () -> Unit,
+  onMoveFolder: () -> Unit,
+  onMoveToTrash: () -> Unit,
+  onRestoreFromTrash: () -> Unit,
+  onDeletePermanently: () -> Unit,
+) {
+  val colors = LocalProNotesColors.current
+  var showMenu by remember { mutableStateOf(false) }
+  val folderColor = Color(folder.colorArgb)
+
+  Column(
+    horizontalAlignment = Alignment.CenterHorizontally,
+    modifier =
+      Modifier
+        .width(150.dp)
+        .clickable(onClick = onOpenFolder)
+        .testTag("folder_card_${folder.id}"),
+  ) {
+    Box(
+      modifier =
+        Modifier
+          .width(142.dp)
+          .height(186.dp)
+          .clip(RoundedCornerShape(14.dp))
+          .background(colors.surfaceVariant)
+          .border(1.dp, colors.border, RoundedCornerShape(14.dp))
+          .padding(12.dp),
+    ) {
+      Icon(
+        imageVector = Icons.Default.Folder,
+        contentDescription = folder.name,
+        tint = folderColor,
+        modifier = Modifier.size(78.dp).align(Alignment.Center),
+      )
+
+      // Item count badge at bottom-left
       Box(
         modifier =
           Modifier
-            .fillMaxWidth(0.92f)
-            .height(cardHeight)
-            .shadow(4.dp, RoundedCornerShape(10.dp))
-            .clip(RoundedCornerShape(10.dp)),
+            .align(Alignment.BottomStart)
+            .clip(RoundedCornerShape(6.dp))
+            .background(colors.surface)
+            .padding(horizontal = 6.dp, vertical = 2.dp),
       ) {
-        val firstPagePdfBitmap = document.pages.firstOrNull()?.pdfPageBitmap
-        if (firstPagePdfBitmap != null) {
-          Image(
-            bitmap = firstPagePdfBitmap.asImageBitmap(),
-            contentDescription = document.title,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize().background(Color.White),
-          )
-        } else {
-          Canvas(modifier = Modifier.fillMaxSize()) {
-            val w = size.width
-            val h = size.height
+        Text(
+          text = "$itemCount item${if (itemCount == 1) "" else "s"}",
+          color = colors.textSecondary,
+          fontSize = 10.sp,
+          fontWeight = FontWeight.SemiBold,
+        )
+      }
 
-            when (document.coverStyle) {
-              NotebookCoverStyle.KRAFT_TAN -> {
-                drawRoundRect(
-                  color = Color(0xFFF3F2EE),
-                  size = Size(w, h),
-                  cornerRadius = CornerRadius(20f, 20f),
-                )
-                val coverH = h * 0.94f
-                drawRoundRect(
-                  color = KraftTanCover,
-                  size = Size(w * 0.96f, coverH),
-                  cornerRadius = CornerRadius(16f, 16f),
-                )
-                drawRect(
-                  color = KraftSpineLight,
-                  topLeft = Offset(0f, 0f),
-                  size = Size(w * 0.13f, coverH),
-                )
-              }
-
-              NotebookCoverStyle.CHARCOAL_DARK -> {
-                drawRoundRect(
-                  color = Color(0xFFEAECEF),
-                  size = Size(w, h),
-                  cornerRadius = CornerRadius(20f, 20f),
-                )
-                val coverH = h * 0.94f
-                drawRoundRect(
-                  color = CharcoalCover,
-                  size = Size(w * 0.96f, coverH),
-                  cornerRadius = CornerRadius(16f, 16f),
-                )
-                drawRect(
-                  color = Color(0xFF161719),
-                  topLeft = Offset(0f, 0f),
-                  size = Size(w * 0.08f, coverH),
-                )
-                drawLine(
-                  color = CharcoalCoverAccent,
-                  start = Offset(w * 0.18f, coverH * 0.25f),
-                  end = Offset(w * 0.55f, coverH * 0.25f),
-                  strokeWidth = 5f,
-                  cap = StrokeCap.Round,
-                )
-                for (i in 0..2) {
-                  val y = coverH * (0.68f + i * 0.08f)
-                  drawLine(
-                    color = Color(0xFF5A5D64),
-                    start = Offset(w * 0.65f, y),
-                    end = Offset(w * 0.88f, y),
-                    strokeWidth = 3f,
-                  )
-                }
-              }
-
-              NotebookCoverStyle.WHITEBOARD -> {
-                drawRoundRect(
-                  color = WhiteboardBg,
-                  size = Size(w, h),
-                  cornerRadius = CornerRadius(20f, 20f),
-                )
-                drawRoundRect(
-                  color = Color(0xFFDCDFE5),
-                  topLeft = Offset(6f, 6f),
-                  size = Size(w - 12f, h - 18f),
-                  cornerRadius = CornerRadius(14f, 14f),
-                  style = Stroke(width = 3f),
-                )
-                for (i in 0..2) {
-                  val y = h * (0.42f + i * 0.08f)
-                  drawLine(
-                    color = Color(0xFFD0D4DC),
-                    start = Offset(w * 0.42f, y),
-                    end = Offset(w * 0.58f, y),
-                    strokeWidth = 4f,
-                    cap = StrokeCap.Round,
-                  )
-                }
-              }
-
-              NotebookCoverStyle.GRID_PAPER -> {
-                drawRoundRect(
-                  color = GridPaperBg,
-                  size = Size(w, h),
-                  cornerRadius = CornerRadius(20f, 20f),
-                )
-                val step = 14f
-                var x = step
-                while (x < w) {
-                  drawLine(
-                    color = Color(0xFFE0E0DC),
-                    start = Offset(x, 0f),
-                    end = Offset(x, h),
-                    strokeWidth = 1.2f,
-                  )
-                  x += step
-                }
-                var y = step
-                while (y < h) {
-                  drawLine(
-                    color = Color(0xFFE0E0DC),
-                    start = Offset(0f, y),
-                    end = Offset(w, y),
-                    strokeWidth = 1.2f,
-                  )
-                  y += step
-                }
-              }
-
-              NotebookCoverStyle.HANDWRITTEN_NOTES -> {
-                drawRoundRect(
-                  color = Color.White,
-                  size = Size(w, h),
-                  cornerRadius = CornerRadius(20f, 20f),
-                )
-                for (i in 1..6) {
-                  val y = h * (i / 7f)
-                  drawLine(
-                    color = Color(0xFFE5EAF0),
-                    start = Offset(0f, y),
-                    end = Offset(w, y),
-                    strokeWidth = 1.5f,
-                  )
-                }
-                drawLine(
-                  color = Color(0xFF2855A8),
-                  start = Offset(w * 0.14f, h * 0.45f),
-                  end = Offset(w * 0.65f, h * 0.45f),
-                  strokeWidth = 3.5f,
-                  cap = StrokeCap.Round,
-                )
-                drawLine(
-                  color = Color(0xFF2855A8),
-                  start = Offset(w * 0.14f, h * 0.58f),
-                  end = Offset(w * 0.52f, h * 0.58f),
-                  strokeWidth = 3.5f,
-                  cap = StrokeCap.Round,
-                )
-                drawLine(
-                  color = Color(0xFFE05280),
-                  start = Offset(w * 0.68f, h * 0.22f),
-                  end = Offset(w * 0.88f, h * 0.22f),
-                  strokeWidth = 4f,
-                  cap = StrokeCap.Round,
-                )
-              }
-
-              NotebookCoverStyle.WHITE_DOCUMENT -> {
-                drawRoundRect(
-                  color = Color.White,
-                  size = Size(w, h),
-                  cornerRadius = CornerRadius(20f, 20f),
-                )
-                drawRoundRect(
-                  color = Color(0xFFEAF2FC),
-                  topLeft = Offset(w * 0.15f, h * 0.34f),
-                  size = Size(w * 0.55f, h * 0.08f),
-                  cornerRadius = CornerRadius(6f, 6f),
-                )
-                drawRoundRect(
-                  color = Color(0xFFEAF2FC),
-                  topLeft = Offset(w * 0.15f, h * 0.46f),
-                  size = Size(w * 0.70f, h * 0.08f),
-                  cornerRadius = CornerRadius(6f, 6f),
-                )
-                drawRoundRect(
-                  color = Color(0xFFEAF2FC),
-                  topLeft = Offset(w * 0.15f, h * 0.58f),
-                  size = Size(w * 0.70f, h * 0.08f),
-                  cornerRadius = CornerRadius(6f, 6f),
-                )
-              }
-            }
-
-            if (document.hasStylusBadge) {
-              val badgePath =
-                Path().apply {
-                  moveTo(0f, 0f)
-                  lineTo(w * 0.34f, 0f)
-                  lineTo(0f, w * 0.34f)
-                  close()
-                }
-              drawPath(path = badgePath, color = Color(0xFF38383A))
-            }
-          }
-        }
-
-        if (document.hasStylusBadge) {
-          Icon(
-            imageVector = Icons.Outlined.EditOff,
-            contentDescription = null,
-            tint = Color.White.copy(alpha = 0.85f),
-            modifier =
-              Modifier
-                .align(Alignment.TopStart)
-                .padding(start = 5.dp, top = 5.dp)
-                .size(12.dp),
-          )
-        }
-
-        // Top-right favorite star icon
-        Box(
+      // Context menu button
+      Box(modifier = Modifier.align(Alignment.TopEnd)) {
+        Icon(
+          imageVector = Icons.Default.MoreVert,
+          contentDescription = "Folder Options",
+          tint = colors.textSecondary,
           modifier =
             Modifier
-              .align(Alignment.TopEnd)
-              .padding(6.dp)
-              .size(22.dp)
-              .clickable(onClick = onToggleFavorite)
-              .testTag("favorite_star_${document.id}"),
-          contentAlignment = Alignment.Center,
+              .size(20.dp)
+              .clickable { showMenu = true }
+              .testTag("folder_menu_${folder.id}"),
+        )
+        DropdownMenu(
+          expanded = showMenu,
+          onDismissRequest = { showMenu = false },
+          modifier = Modifier.background(colors.popoverBg),
         ) {
-          Icon(
-            imageVector = if (document.isFavorite) Icons.Default.Star else Icons.Outlined.StarBorder,
-            contentDescription = "Favorite",
-            tint =
-              if (document.isFavorite) {
-                Color(0xFFFFD54F)
-              } else {
-                Color(0xFF8E8E93)
+          if (!folder.isTrashed) {
+            DropdownMenuItem(
+              text = { Text("Open Folder", color = colors.textPrimary, fontSize = 13.sp) },
+              onClick = {
+                showMenu = false
+                onOpenFolder()
               },
-            modifier = Modifier.size(16.dp),
-          )
-        }
-
-        // Cybersecurity Vault Lock Overlay Badge if notebook is PIN-locked
-        if (document.isLockedVault) {
-          Box(
-            modifier =
-              Modifier
-                .fillMaxSize()
-                .background(Color(0xCC12141A)),
-            contentAlignment = Alignment.Center,
-          ) {
-            Column(
-              horizontalAlignment = Alignment.CenterHorizontally,
-              verticalArrangement = Arrangement.Center,
-            ) {
-              SecurityVaultShieldIcon(
-                tint = Color(0xFF67C8EB),
-                isLocked = true,
-                modifier = Modifier.size(28.dp),
-              )
-              Spacer(modifier = Modifier.height(4.dp))
-              Text(
-                text = "VAULT LOCKED",
-                color = Color(0xFF67C8EB),
-                fontSize = 9.5.sp,
-                fontWeight = FontWeight.Bold,
-              )
-            }
+            )
+            DropdownMenuItem(
+              text = { Text("Rename Folder", color = colors.textPrimary, fontSize = 13.sp) },
+              leadingIcon = {
+                Icon(Icons.Default.Edit, contentDescription = null, tint = colors.textSecondary)
+              },
+              onClick = {
+                showMenu = false
+                onRenameFolder()
+              },
+            )
+            DropdownMenuItem(
+              text = { Text("Move to Folder...", color = colors.textPrimary, fontSize = 13.sp) },
+              leadingIcon = {
+                Icon(
+                  Icons.AutoMirrored.Outlined.DriveFileMove,
+                  contentDescription = null,
+                  tint = colors.textSecondary,
+                )
+              },
+              onClick = {
+                showMenu = false
+                onMoveFolder()
+              },
+            )
+            DropdownMenuItem(
+              text = { Text("Move to Trash", color = DangerRed, fontSize = 13.sp) },
+              leadingIcon = {
+                Icon(Icons.Default.Delete, contentDescription = null, tint = DangerRed)
+              },
+              onClick = {
+                showMenu = false
+                onMoveToTrash()
+              },
+            )
+          } else {
+            DropdownMenuItem(
+              text = { Text("Restore Folder", color = colors.textPrimary, fontSize = 13.sp) },
+              leadingIcon = {
+                Icon(Icons.Default.RestoreFromTrash, contentDescription = null, tint = SwitchBlue)
+              },
+              onClick = {
+                showMenu = false
+                onRestoreFromTrash()
+              },
+            )
+            DropdownMenuItem(
+              text = { Text("Delete Permanently", color = DangerRed, fontSize = 13.sp) },
+              leadingIcon = {
+                Icon(Icons.Default.Delete, contentDescription = null, tint = DangerRed)
+              },
+              onClick = {
+                showMenu = false
+                onDeletePermanently()
+              },
+            )
           }
         }
       }
@@ -1000,88 +1135,972 @@ private fun NotebookGridItem(
 
     Spacer(modifier = Modifier.height(8.dp))
 
-    // Title + chevron context menu
-    Box {
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.Center,
-        modifier = Modifier.fillMaxWidth().clickable { showCardMenu = true },
-      ) {
-        Text(
-          text = document.title,
-          color = TextPrimaryWhite,
-          fontSize = 12.5.sp,
-          fontWeight = FontWeight.Medium,
-          maxLines = 2,
-          overflow = TextOverflow.Ellipsis,
-          textAlign = TextAlign.Center,
-          modifier = Modifier.weight(1f, fill = false),
+    Text(
+      text = folder.name,
+      color = colors.textPrimary,
+      fontSize = 13.5.sp,
+      fontWeight = FontWeight.SemiBold,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
+    )
+    Text(
+      text = "Folder",
+      color = colors.textSecondary,
+      fontSize = 11.sp,
+    )
+  }
+}
+
+@Composable
+private fun NotebookGridCard(
+  document: NotebookDocument,
+  onClick: () -> Unit,
+  onRename: () -> Unit,
+  onMoveToFolder: () -> Unit,
+  onToggleFavorite: () -> Unit,
+  onMoveToTrash: () -> Unit,
+  onRestoreFromTrash: () -> Unit,
+  onDeletePermanently: () -> Unit,
+) {
+  val colors = LocalProNotesColors.current
+  var showCardMenu by remember { mutableStateOf(false) }
+
+  Column(
+    horizontalAlignment = Alignment.CenterHorizontally,
+    modifier =
+      Modifier
+        .width(150.dp)
+        .clickable(onClick = onClick)
+        .testTag("notebook_card_${document.id}"),
+  ) {
+    Box(
+      modifier =
+        Modifier
+          .width(142.dp)
+          .height(186.dp)
+          .shadow(8.dp, RoundedCornerShape(10.dp))
+          .clip(RoundedCornerShape(10.dp)),
+    ) {
+      // PRIVACY RULE (Stage 2F): Never expose page content or PDF thumbnails for locked Vault notebooks!
+      val firstPdfBitmap =
+        if (document.isLockedVault) null
+        else document.pages.firstOrNull()?.pdfPageBitmap
+
+      if (document.isLockedVault) {
+        VaultLockedCoverArtwork()
+      } else if (firstPdfBitmap != null) {
+        Image(
+          bitmap = firstPdfBitmap.asImageBitmap(),
+          contentDescription = document.title,
+          contentScale = ContentScale.Crop,
+          modifier = Modifier.fillMaxSize().background(Color.White),
         )
-        Spacer(modifier = Modifier.width(2.dp))
-        Icon(
-          imageVector = Icons.Default.KeyboardArrowDown,
-          contentDescription = "Notebook options",
-          tint = TextSecondaryGray,
-          modifier = Modifier.size(14.dp),
-        )
+        Box(
+          modifier =
+            Modifier
+              .align(Alignment.TopStart)
+              .padding(6.dp)
+              .clip(RoundedCornerShape(4.dp))
+              .background(Color(0xCC1E5AA8))
+              .padding(horizontal = 5.dp, vertical = 2.dp),
+        ) {
+          Text(
+            text = "PDF • ${document.pages.size}p",
+            color = Color.White,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+          )
+        }
+      } else {
+        NotebookCoverArtwork(coverStyle = document.coverStyle)
       }
 
-      DropdownMenu(
-        expanded = showCardMenu,
-        onDismissRequest = { showCardMenu = false },
-        modifier = Modifier.background(PopoverBg),
-      ) {
-        DropdownMenuItem(
-          text = { Text("Open Notebook", color = TextPrimaryWhite, fontSize = 13.sp) },
-          onClick = {
-            showCardMenu = false
-            onClick()
-          },
-        )
-        DropdownMenuItem(
-          text = {
-            Text(
-              if (document.isFavorite) "Remove from Favorites" else "Add to Favorites",
-              color = TextPrimaryWhite,
-              fontSize = 13.sp,
-            )
-          },
-          onClick = {
-            showCardMenu = false
-            onToggleFavorite()
-          },
-        )
-        DropdownMenuItem(
-          text = {
-            Text(
-              if (document.isTrashed) "Restore from Trash" else "Move to Trash",
-              color = TextPrimaryWhite,
-              fontSize = 13.sp,
-            )
-          },
-          onClick = {
-            showCardMenu = false
-            onMoveToTrash()
-          },
-        )
-        DropdownMenuItem(
-          text = { Text("Delete Permanently", color = DangerRed, fontSize = 13.sp) },
-          onClick = {
-            showCardMenu = false
-            onDeletePermanently()
-          },
-        )
+      if (document.documentType == DocumentType.WHITEBOARD && !document.isLockedVault) {
+        Box(
+          modifier =
+            Modifier
+              .align(Alignment.TopStart)
+              .padding(6.dp)
+              .clip(RoundedCornerShape(4.dp))
+              .background(Color(0xDD00838F))
+              .padding(horizontal = 5.dp, vertical = 2.dp),
+        ) {
+          Text(
+            text = "BOARD",
+            color = Color.White,
+            fontSize = 8.5.sp,
+            fontWeight = FontWeight.Bold,
+          )
+        }
       }
+
+      // Context Menu (`⋮`) at top-right of cover
+      Box(
+        modifier =
+          Modifier
+            .align(Alignment.TopEnd)
+            .padding(6.dp),
+      ) {
+        Box(
+          modifier =
+            Modifier
+              .size(24.dp)
+              .clip(CircleShape)
+              .background(Color.Black.copy(alpha = 0.42f))
+              .clickable { showCardMenu = true }
+              .testTag("notebook_menu_${document.id}"),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.MoreVert,
+            contentDescription = "Notebook Options",
+            tint = Color.White,
+            modifier = Modifier.size(15.dp),
+          )
+        }
+
+        DropdownMenu(
+          expanded = showCardMenu,
+          onDismissRequest = { showCardMenu = false },
+          modifier = Modifier.background(colors.popoverBg),
+        ) {
+          if (!document.isTrashed) {
+            DropdownMenuItem(
+              text = { Text("Open", color = colors.textPrimary, fontSize = 13.sp) },
+              onClick = {
+                showCardMenu = false
+                onClick()
+              },
+            )
+            DropdownMenuItem(
+              text = { Text("Rename", color = colors.textPrimary, fontSize = 13.sp) },
+              leadingIcon = {
+                Icon(Icons.Default.Edit, contentDescription = null, tint = colors.textSecondary)
+              },
+              onClick = {
+                showCardMenu = false
+                onRename()
+              },
+            )
+            DropdownMenuItem(
+              text = { Text("Move to Folder...", color = colors.textPrimary, fontSize = 13.sp) },
+              leadingIcon = {
+                Icon(
+                  Icons.AutoMirrored.Outlined.DriveFileMove,
+                  contentDescription = null,
+                  tint = colors.textSecondary,
+                )
+              },
+              onClick = {
+                showCardMenu = false
+                onMoveToFolder()
+              },
+            )
+            DropdownMenuItem(
+              text = {
+                Text(
+                  if (document.isFavorite) "Remove from Favorites" else "Add to Favorites",
+                  color = colors.textPrimary,
+                  fontSize = 13.sp,
+                )
+              },
+              leadingIcon = {
+                Icon(
+                  Icons.Default.Star,
+                  contentDescription = null,
+                  tint = if (document.isFavorite) Color(0xFFFFCA28) else colors.textSecondary,
+                )
+              },
+              onClick = {
+                showCardMenu = false
+                onToggleFavorite()
+              },
+            )
+            DropdownMenuItem(
+              text = { Text("Move to Trash", color = DangerRed, fontSize = 13.sp) },
+              leadingIcon = {
+                Icon(Icons.Default.Delete, contentDescription = null, tint = DangerRed)
+              },
+              onClick = {
+                showCardMenu = false
+                onMoveToTrash()
+              },
+            )
+          } else {
+            DropdownMenuItem(
+              text = { Text("Restore Document", color = colors.textPrimary, fontSize = 13.sp) },
+              leadingIcon = {
+                Icon(Icons.Default.RestoreFromTrash, contentDescription = null, tint = SwitchBlue)
+              },
+              onClick = {
+                showCardMenu = false
+                onRestoreFromTrash()
+              },
+            )
+            DropdownMenuItem(
+              text = { Text("Delete Permanently", color = DangerRed, fontSize = 13.sp) },
+              leadingIcon = {
+                Icon(Icons.Default.Delete, contentDescription = null, tint = DangerRed)
+              },
+              onClick = {
+                showCardMenu = false
+                onDeletePermanently()
+              },
+            )
+          }
+        }
+      }
+
+      if (document.isLockedVault) {
+        Box(
+          modifier =
+            Modifier
+              .align(Alignment.BottomEnd)
+              .padding(6.dp)
+              .size(22.dp)
+              .clip(CircleShape)
+              .background(Color(0xDD1A1D24))
+              .border(1.dp, Color(0xFF34C759), CircleShape),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Default.Lock,
+            contentDescription = "Locked with Vault PIN",
+            tint = Color(0xFF34C759),
+            modifier = Modifier.size(12.dp),
+          )
+        }
+      }
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.Center,
+      modifier = Modifier.fillMaxWidth(),
+    ) {
+      Icon(
+        imageVector = if (document.isFavorite) Icons.Default.Star else Icons.Outlined.StarBorder,
+        contentDescription = "Favorite",
+        tint = if (document.isFavorite) Color(0xFFFFCA28) else colors.textSecondary,
+        modifier =
+          Modifier
+            .size(15.dp)
+            .clickable(onClick = onToggleFavorite)
+            .testTag("favorite_star_${document.id}"),
+      )
+      Spacer(modifier = Modifier.width(4.dp))
+      Text(
+        text = document.title,
+        color = colors.textPrimary,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.Medium,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
     }
 
     Spacer(modifier = Modifier.height(2.dp))
 
     Text(
-      text = document.timestamp,
-      color = TextMutedGray,
-      fontSize = 10.sp,
-      maxLines = 1,
-      overflow = TextOverflow.Ellipsis,
+      text =
+        if (document.documentType == DocumentType.WHITEBOARD) "Whiteboard • ${document.dateLabel}"
+        else "${document.pages.size}p • ${document.dateLabel}",
+      color = colors.textSecondary,
+      fontSize = 11.sp,
     )
+  }
+}
+
+@Composable
+private fun FolderListRow(
+  folder: FolderItem,
+  itemCount: Int,
+  onOpenFolder: () -> Unit,
+  onRenameFolder: () -> Unit,
+  onMoveFolder: () -> Unit,
+  onMoveToTrash: () -> Unit,
+  onRestoreFromTrash: () -> Unit,
+  onDeletePermanently: () -> Unit,
+) {
+  val colors = LocalProNotesColors.current
+  Row(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(12.dp))
+        .background(colors.surfaceVariant)
+        .border(1.dp, colors.border, RoundedCornerShape(12.dp))
+        .clickable(onClick = onOpenFolder)
+        .padding(horizontal = 14.dp, vertical = 10.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.SpaceBetween,
+  ) {
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
+      modifier = Modifier.weight(1f),
+    ) {
+      Icon(
+        imageVector = Icons.Default.Folder,
+        contentDescription = null,
+        tint = Color(folder.colorArgb),
+        modifier = Modifier.size(30.dp),
+      )
+      Column {
+        Text(
+          text = folder.name,
+          color = colors.textPrimary,
+          fontSize = 14.sp,
+          fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+          text = "$itemCount item${if (itemCount == 1) "" else "s"}",
+          color = colors.textSecondary,
+          fontSize = 11.5.sp,
+        )
+      }
+    }
+
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+      if (!folder.isTrashed) {
+        Icon(
+          imageVector = Icons.Default.Edit,
+          contentDescription = "Rename",
+          tint = colors.textSecondary,
+          modifier = Modifier.size(18.dp).clickable(onClick = onRenameFolder),
+        )
+        Icon(
+          imageVector = Icons.AutoMirrored.Outlined.DriveFileMove,
+          contentDescription = "Move",
+          tint = colors.textSecondary,
+          modifier = Modifier.size(18.dp).clickable(onClick = onMoveFolder),
+        )
+        Icon(
+          imageVector = Icons.Default.Delete,
+          contentDescription = "Trash",
+          tint = DangerRed,
+          modifier = Modifier.size(18.dp).clickable(onClick = onMoveToTrash),
+        )
+      } else {
+        Icon(
+          imageVector = Icons.Default.RestoreFromTrash,
+          contentDescription = "Restore",
+          tint = SwitchBlue,
+          modifier = Modifier.size(18.dp).clickable(onClick = onRestoreFromTrash),
+        )
+        Icon(
+          imageVector = Icons.Default.Delete,
+          contentDescription = "Delete Permanently",
+          tint = DangerRed,
+          modifier = Modifier.size(18.dp).clickable(onClick = onDeletePermanently),
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun NotebookListRow(
+  document: NotebookDocument,
+  onClick: () -> Unit,
+  onRename: () -> Unit,
+  onMoveToFolder: () -> Unit,
+  onToggleFavorite: () -> Unit,
+  onMoveToTrash: () -> Unit,
+  onRestoreFromTrash: () -> Unit,
+  onDeletePermanently: () -> Unit,
+) {
+  val colors = LocalProNotesColors.current
+  Row(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .clip(RoundedCornerShape(12.dp))
+        .background(colors.surfaceVariant)
+        .border(1.dp, colors.border, RoundedCornerShape(12.dp))
+        .clickable(onClick = onClick)
+        .padding(horizontal = 14.dp, vertical = 10.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.SpaceBetween,
+  ) {
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(12.dp),
+      modifier = Modifier.weight(1f),
+    ) {
+      Icon(
+        imageVector =
+          when {
+            document.isLockedVault -> Icons.Default.Lock
+            document.documentType == DocumentType.WHITEBOARD -> Icons.Outlined.Draw
+            else -> Icons.Outlined.MenuBook
+          },
+        contentDescription = null,
+        tint =
+          if (document.isLockedVault) Color(0xFF34C759)
+          else colors.accentBlue,
+        modifier = Modifier.size(26.dp),
+      )
+      Column {
+        Text(
+          text = document.title,
+          color = colors.textPrimary,
+          fontSize = 14.sp,
+          fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+          text =
+            if (document.isLockedVault) "Encrypted Vault Document • ${document.dateLabel}"
+            else "${document.pages.size} pages • ${document.pageSizePreset.label} • ${document.dateLabel}",
+          color = colors.textSecondary,
+          fontSize = 11.5.sp,
+        )
+      }
+    }
+
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+      if (!document.isTrashed) {
+        Icon(
+          imageVector = if (document.isFavorite) Icons.Default.Star else Icons.Outlined.StarBorder,
+          contentDescription = "Favorite",
+          tint = if (document.isFavorite) Color(0xFFFFCA28) else colors.textSecondary,
+          modifier = Modifier.size(18.dp).clickable(onClick = onToggleFavorite),
+        )
+        Icon(
+          imageVector = Icons.Default.Edit,
+          contentDescription = "Rename",
+          tint = colors.textSecondary,
+          modifier = Modifier.size(18.dp).clickable(onClick = onRename),
+        )
+        Icon(
+          imageVector = Icons.AutoMirrored.Outlined.DriveFileMove,
+          contentDescription = "Move",
+          tint = colors.textSecondary,
+          modifier = Modifier.size(18.dp).clickable(onClick = onMoveToFolder),
+        )
+        Icon(
+          imageVector = Icons.Default.Delete,
+          contentDescription = "Trash",
+          tint = DangerRed,
+          modifier = Modifier.size(18.dp).clickable(onClick = onMoveToTrash),
+        )
+      } else {
+        Icon(
+          imageVector = Icons.Default.RestoreFromTrash,
+          contentDescription = "Restore",
+          tint = SwitchBlue,
+          modifier = Modifier.size(18.dp).clickable(onClick = onRestoreFromTrash),
+        )
+        Icon(
+          imageVector = Icons.Default.Delete,
+          contentDescription = "Delete Permanently",
+          tint = DangerRed,
+          modifier = Modifier.size(18.dp).clickable(onClick = onDeletePermanently),
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun VaultLockedCoverArtwork() {
+  Box(
+    modifier =
+      Modifier
+        .fillMaxSize()
+        .background(
+          Brush.verticalGradient(
+            listOf(Color(0xFF182232), Color(0xFF0F1622))
+          )
+        ),
+    contentAlignment = Alignment.Center,
+  ) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+      Box(
+        modifier =
+          Modifier
+            .size(48.dp)
+            .clip(CircleShape)
+            .background(Color(0x2234C759))
+            .border(1.5.dp, Color(0xFF34C759), CircleShape),
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Default.Lock,
+          contentDescription = "Encrypted Vault",
+          tint = Color(0xFF34C759),
+          modifier = Modifier.size(24.dp),
+        )
+      }
+      Spacer(modifier = Modifier.height(8.dp))
+      Text(
+        text = "VAULT LOCKED",
+        color = Color(0xFF34C759),
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Bold,
+      )
+      Text(
+        text = "AES-GCM Protected",
+        color = Color(0xFF8E95A5),
+        fontSize = 8.5.sp,
+      )
+    }
+  }
+}
+
+@Composable
+private fun CreateFolderModalDialog(
+  onConfirm: (String, Long) -> Unit,
+  onDismiss: () -> Unit,
+) {
+  val colors = LocalProNotesColors.current
+  var folderName by remember { mutableStateOf("") }
+  val folderColorOptions =
+    listOf(
+      0xFF4C8DF6L,
+      0xFFFFCA28L,
+      0xFF26A69AL,
+      0xFFAB47BCL,
+      0xFFEF5350L,
+      0xFF66BB6AL,
+    )
+  var selectedColorIdx by remember { mutableIntStateOf(0) }
+
+  Box(
+    modifier =
+      Modifier
+        .fillMaxSize()
+        .background(Color.Black.copy(alpha = 0.6f))
+        .clickable(onClick = onDismiss),
+    contentAlignment = Alignment.Center,
+  ) {
+    Column(
+      modifier =
+        Modifier
+          .widthIn(max = 360.dp)
+          .fillMaxWidth(0.9f)
+          .clip(RoundedCornerShape(16.dp))
+          .background(colors.popoverBg)
+          .border(1.dp, colors.border, RoundedCornerShape(16.dp))
+          .clickable(enabled = false) {}
+          .padding(20.dp)
+          .testTag("create_folder_dialog"),
+    ) {
+      Text(
+        text = "New Folder",
+        color = colors.textPrimary,
+        fontSize = 17.sp,
+        fontWeight = FontWeight.Bold,
+      )
+      Spacer(modifier = Modifier.height(12.dp))
+      OutlinedTextField(
+        value = folderName,
+        onValueChange = { folderName = it },
+        placeholder = { Text("Folder Name", color = colors.textSecondary) },
+        singleLine = true,
+        colors =
+          OutlinedTextFieldDefaults.colors(
+            focusedTextColor = colors.textPrimary,
+            unfocusedTextColor = colors.textPrimary,
+            focusedBorderColor = colors.accentBlue,
+            unfocusedBorderColor = colors.border,
+          ),
+        modifier = Modifier.fillMaxWidth().testTag("folder_name_input"),
+      )
+
+      Spacer(modifier = Modifier.height(12.dp))
+      Text(
+        text = "FOLDER COLOR",
+        color = colors.textSecondary,
+        fontSize = 10.5.sp,
+        fontWeight = FontWeight.SemiBold,
+      )
+      Spacer(modifier = Modifier.height(8.dp))
+      Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        folderColorOptions.forEachIndexed { idx, argb ->
+          val isSel = selectedColorIdx == idx
+          Box(
+            modifier =
+              Modifier
+                .size(28.dp)
+                .clip(CircleShape)
+                .background(Color(argb))
+                .border(
+                  width = if (isSel) 2.5.dp else 1.dp,
+                  color = if (isSel) Color.White else Color.Transparent,
+                  shape = CircleShape,
+                )
+                .clickable { selectedColorIdx = idx },
+          )
+        }
+      }
+
+      Spacer(modifier = Modifier.height(18.dp))
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.End,
+      ) {
+        Box(
+          modifier =
+            Modifier
+              .clip(RoundedCornerShape(8.dp))
+              .clickable(onClick = onDismiss)
+              .padding(horizontal = 14.dp, vertical = 8.dp),
+        ) {
+          Text("Cancel", color = colors.textSecondary, fontSize = 13.sp)
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Box(
+          modifier =
+            Modifier
+              .clip(RoundedCornerShape(8.dp))
+              .background(NewButtonBlue)
+              .clickable {
+                onConfirm(
+                  folderName.trim().ifEmpty { "Untitled Folder" },
+                  folderColorOptions[selectedColorIdx],
+                )
+              }
+              .padding(horizontal = 16.dp, vertical = 8.dp)
+              .testTag("confirm_create_folder_button"),
+        ) {
+          Text("Create Folder", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun RenameItemModalDialog(
+  titleLabel: String,
+  initialValue: String,
+  onConfirm: (String) -> Unit,
+  onDismiss: () -> Unit,
+) {
+  val colors = LocalProNotesColors.current
+  var nameText by remember(initialValue) { mutableStateOf(initialValue) }
+
+  Box(
+    modifier =
+      Modifier
+        .fillMaxSize()
+        .background(Color.Black.copy(alpha = 0.6f))
+        .clickable(onClick = onDismiss),
+    contentAlignment = Alignment.Center,
+  ) {
+    Column(
+      modifier =
+        Modifier
+          .widthIn(max = 360.dp)
+          .fillMaxWidth(0.9f)
+          .clip(RoundedCornerShape(16.dp))
+          .background(colors.popoverBg)
+          .border(1.dp, colors.border, RoundedCornerShape(16.dp))
+          .clickable(enabled = false) {}
+          .padding(20.dp)
+          .testTag("rename_item_dialog"),
+    ) {
+      Text(
+        text = titleLabel,
+        color = colors.textPrimary,
+        fontSize = 17.sp,
+        fontWeight = FontWeight.Bold,
+      )
+      Spacer(modifier = Modifier.height(12.dp))
+      OutlinedTextField(
+        value = nameText,
+        onValueChange = { nameText = it },
+        singleLine = true,
+        colors =
+          OutlinedTextFieldDefaults.colors(
+            focusedTextColor = colors.textPrimary,
+            unfocusedTextColor = colors.textPrimary,
+            focusedBorderColor = colors.accentBlue,
+            unfocusedBorderColor = colors.border,
+          ),
+        modifier = Modifier.fillMaxWidth().testTag("rename_item_input"),
+      )
+      Spacer(modifier = Modifier.height(16.dp))
+      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+        Box(
+          modifier =
+            Modifier
+              .clip(RoundedCornerShape(8.dp))
+              .clickable(onClick = onDismiss)
+              .padding(horizontal = 14.dp, vertical = 8.dp),
+        ) {
+          Text("Cancel", color = colors.textSecondary, fontSize = 13.sp)
+        }
+        Spacer(modifier = Modifier.width(8.dp))
+        Box(
+          modifier =
+            Modifier
+              .clip(RoundedCornerShape(8.dp))
+              .background(NewButtonBlue)
+              .clickable { onConfirm(nameText.trim()) }
+              .padding(horizontal = 16.dp, vertical = 8.dp)
+              .testTag("confirm_rename_button"),
+        ) {
+          Text("Save", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+        }
+      }
+    }
+  }
+}
+
+@Composable
+private fun MoveToFolderModalDialog(
+  isMovingFolder: Boolean,
+  folders: List<FolderItem>,
+  onSelectDestination: (String?) -> Unit,
+  onDismiss: () -> Unit,
+) {
+  val colors = LocalProNotesColors.current
+  Box(
+    modifier =
+      Modifier
+        .fillMaxSize()
+        .background(Color.Black.copy(alpha = 0.6f))
+        .clickable(onClick = onDismiss),
+    contentAlignment = Alignment.Center,
+  ) {
+    Column(
+      modifier =
+        Modifier
+          .widthIn(max = 360.dp)
+          .fillMaxWidth(0.9f)
+          .clip(RoundedCornerShape(16.dp))
+          .background(colors.popoverBg)
+          .border(1.dp, colors.border, RoundedCornerShape(16.dp))
+          .clickable(enabled = false) {}
+          .padding(20.dp)
+          .testTag("move_to_folder_dialog"),
+    ) {
+      Text(
+        text = if (isMovingFolder) "Move Folder To..." else "Move Document To...",
+        color = colors.textPrimary,
+        fontSize = 16.sp,
+        fontWeight = FontWeight.Bold,
+      )
+      Spacer(modifier = Modifier.height(10.dp))
+
+      // Root Documents option
+      Row(
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(8.dp))
+            .background(colors.surfaceVariant)
+            .clickable { onSelectDestination(null) }
+            .padding(12.dp)
+            .testTag("move_dest_root"),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
+        Icon(Icons.Outlined.Folder, contentDescription = null, tint = colors.accentBlue)
+        Text("Documents (Root)", color = colors.textPrimary, fontSize = 13.5.sp, fontWeight = FontWeight.Medium)
+      }
+
+      Spacer(modifier = Modifier.height(6.dp))
+
+      LazyColumn(
+        modifier = Modifier.height(180.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        items(folders, key = { it.id }) { folder ->
+          Row(
+            modifier =
+              Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(colors.surfaceVariant)
+                .clickable { onSelectDestination(folder.id) }
+                .padding(12.dp)
+                .testTag("move_dest_${folder.id}"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+          ) {
+            Icon(Icons.Default.Folder, contentDescription = null, tint = Color(folder.colorArgb))
+            Text(folder.name, color = colors.textPrimary, fontSize = 13.5.sp)
+          }
+        }
+      }
+
+      Spacer(modifier = Modifier.height(12.dp))
+      Box(
+        modifier =
+          Modifier
+            .align(Alignment.End)
+            .clip(RoundedCornerShape(8.dp))
+            .clickable(onClick = onDismiss)
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+      ) {
+        Text("Cancel", color = colors.textSecondary, fontSize = 13.sp)
+      }
+    }
+  }
+}
+
+@Composable
+private fun NotebookCoverArtwork(coverStyle: NotebookCoverStyle) {
+  when (coverStyle) {
+    NotebookCoverStyle.WHITEBOARD -> {
+      Box(
+        modifier =
+          Modifier
+            .fillMaxSize()
+            .background(BookCoverWhiteboard),
+      ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+          val w = size.width
+          val h = size.height
+          val path1 =
+            Path().apply {
+              moveTo(w * 0.25f, h * 0.65f)
+              quadraticTo(w * 0.45f, h * 0.35f, w * 0.72f, h * 0.48f)
+            }
+          drawPath(
+            path = path1,
+            color = Color(0xFF4285F4),
+            style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round),
+          )
+        }
+      }
+    }
+
+    NotebookCoverStyle.CHARCOAL_DARK -> {
+      Box(
+        modifier =
+          Modifier
+            .fillMaxSize()
+            .background(BookCoverCharcoal),
+      ) {
+        Box(
+          modifier =
+            Modifier
+              .width(14.dp)
+              .fillMaxHeight()
+              .background(BookCoverSpineDark),
+        )
+        Box(
+          modifier =
+            Modifier
+              .align(Alignment.TopEnd)
+              .padding(end = 18.dp)
+              .width(12.dp)
+              .height(34.dp)
+              .background(BookCoverRibbonBlue),
+        )
+        Box(
+          modifier =
+            Modifier
+              .align(Alignment.TopCenter)
+              .padding(start = 8.dp, top = 36.dp)
+              .width(86.dp)
+              .height(32.dp)
+              .clip(RoundedCornerShape(4.dp))
+              .background(Color.White.copy(alpha = 0.92f)),
+        )
+      }
+    }
+
+    NotebookCoverStyle.GRID_PAPER -> {
+      Box(
+        modifier =
+          Modifier
+            .fillMaxSize()
+            .background(BookCoverGridPaper),
+      ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+          val step = 16.dp.toPx()
+          var x = step
+          while (x < size.width) {
+            drawLine(
+              color = BookCoverGridLine,
+              start = Offset(x, 0f),
+              end = Offset(x, size.height),
+              strokeWidth = 1f,
+            )
+            x += step
+          }
+          var y = step
+          while (y < size.height) {
+            drawLine(
+              color = BookCoverGridLine,
+              start = Offset(0f, y),
+              end = Offset(size.width, y),
+              strokeWidth = 1f,
+            )
+            y += step
+          }
+        }
+      }
+    }
+
+    NotebookCoverStyle.KRAFT_TAN -> {
+      Box(
+        modifier =
+          Modifier
+            .fillMaxSize()
+            .background(BookCoverKraftTan),
+      ) {
+        Box(
+          modifier =
+            Modifier
+              .width(14.dp)
+              .fillMaxHeight()
+              .background(BookCoverSpineKraft),
+        )
+        Canvas(modifier = Modifier.fillMaxSize()) {
+          val w = size.width
+          val h = size.height
+          val labelTop = h * 0.22f
+          val labelHeight = h * 0.20f
+          drawRoundRect(
+            color = Color(0xFFFDFBF7),
+            topLeft = Offset(w * 0.22f, labelTop),
+            size = Size(w * 0.64f, labelHeight),
+            cornerRadius = CornerRadius(4.dp.toPx(), 4.dp.toPx()),
+          )
+        }
+      }
+    }
+
+    NotebookCoverStyle.WHITE_DOCUMENT,
+    NotebookCoverStyle.HANDWRITTEN_NOTES -> {
+      Box(
+        modifier =
+          Modifier
+            .fillMaxSize()
+            .background(Color.White)
+            .padding(10.dp),
+      ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+          val w = size.width
+          val h = size.height
+          val spacing = h / 11f
+          for (i in 1..10) {
+            drawLine(
+              color = Color(0xFFE5ECF2),
+              start = Offset(0f, i * spacing),
+              end = Offset(w, i * spacing),
+              strokeWidth = 1.2f,
+            )
+          }
+        }
+        Column(modifier = Modifier.fillMaxSize()) {
+          Text(
+            text = "Study Notes",
+            color = Color(0xFF1F5AA6),
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            fontFamily = FontFamily.Serif,
+          )
+        }
+      }
+    }
   }
 }

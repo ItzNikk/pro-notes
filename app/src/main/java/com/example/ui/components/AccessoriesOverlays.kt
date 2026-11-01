@@ -769,79 +769,7 @@ fun ToolbarCustomizationPopover(
         }
       }
 
-      Spacer(modifier = Modifier.height(10.dp))
-
-      // Toolbar Position Selector: Top, Bottom, Left, Right + Reset Draggable Pill
-      Text(
-        text = "TOOLBAR DOCK POSITION (OR LONG-PRESS TOOLBAR)",
-        color = textGray,
-        fontSize = 10.sp,
-        fontWeight = FontWeight.Medium,
-        modifier = Modifier.padding(start = 8.dp, bottom = 4.dp),
-      )
-      Column(
-        modifier =
-          Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(cardWhite)
-            .padding(6.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-      ) {
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-          ToolbarDockPosition.entries.forEach { pos ->
-            val isSelected = pos == toolbarDockPosition
-            Row(
-              modifier =
-                Modifier
-                  .weight(1f)
-                  .height(30.dp)
-                  .clip(RoundedCornerShape(7.dp))
-                  .background(if (isSelected) iosBlue else Color(0xFFF2F2F7))
-                  .clickable { onSelectToolbarDockPosition(pos) }
-                  .padding(horizontal = 4.dp)
-                  .testTag("toolbar_dock_${pos.name.lowercase()}"),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.Center,
-            ) {
-              DockPositionIcon(
-                position = pos,
-                tint = if (isSelected) Color.White else textDark,
-                modifier = Modifier.size(13.dp),
-              )
-              Spacer(modifier = Modifier.width(3.dp))
-              Text(
-                text = pos.label,
-                color = if (isSelected) Color.White else textDark,
-                fontSize = 10.5.sp,
-                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-              )
-            }
-          }
-        }
-        Box(
-          modifier =
-            Modifier
-              .fillMaxWidth()
-              .height(26.dp)
-              .clip(RoundedCornerShape(7.dp))
-              .background(Color(0xFFF2F2F7))
-              .clickable(onClick = onResetSubToolbarPosition),
-          contentAlignment = Alignment.Center,
-        ) {
-          Text(
-            text = "Reset Floating Sub-Toolbar Position",
-            color = iosBlue,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-          )
-        }
-      }
-
-      Spacer(modifier = Modifier.height(10.dp))
+      Spacer(modifier = Modifier.height(12.dp))
 
       Text(
         text = "VISIBLE IN TOOLBAR",
@@ -969,7 +897,7 @@ fun ToolbarCustomizationPopover(
       Spacer(modifier = Modifier.height(6.dp))
 
       Text(
-        text = "At least one tool must be visible in the toolbar. Drag the floating writing bar handle to reposition it anywhere.",
+        text = "At least one tool must be visible in the docked toolbar.",
         color = textGray,
         fontSize = 10.5.sp,
         modifier = Modifier.padding(horizontal = 8.dp),
