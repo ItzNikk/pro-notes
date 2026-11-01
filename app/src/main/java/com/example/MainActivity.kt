@@ -2,7 +2,9 @@ package com.example
 
 import android.app.Activity
 import android.os.Bundle
+import android.view.MotionEvent
 import android.view.WindowManager
+import com.example.util.StylusInputTracker
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -79,7 +81,6 @@ import com.example.ui.components.TemplatePreviewCanvas
 import com.example.ui.components.UnlockVaultDialog
 import com.example.ui.screens.DocumentsScreen
 import com.example.ui.screens.EditorScreen
-import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.LocalProNotesColors
 import com.example.ui.theme.MyApplicationTheme
@@ -93,6 +94,17 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class MainActivity : ComponentActivity() {
+  // Feed raw pen/touch/hover events to the stylus tracker before Compose sees them.
+  override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+    StylusInputTracker.onMotionEvent(ev, window?.decorView)
+    return super.dispatchTouchEvent(ev)
+  }
+
+  override fun dispatchGenericMotionEvent(ev: MotionEvent): Boolean {
+    StylusInputTracker.onMotionEvent(ev, null)
+    return super.dispatchGenericMotionEvent(ev)
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
     enableEdgeToEdge()
@@ -278,7 +290,7 @@ fun ProNotesAppRoot(
             )
           },
           onImportPdfDocument = { pdfPickerLauncher.launch(arrayOf("application/pdf")) },
-          onCreateFolder = { name, colorArgb -> viewModel.createFolder(name, colorArgb = colorArgb) },
+          onCreateFolder = { name, _ -> viewModel.createFolder(name) },
           onNavigateToFolder = viewModel::navigateToFolder,
           onNavigateUpFolder = viewModel::navigateUpFolder,
           onRenameFolder = viewModel::renameFolder,
@@ -351,7 +363,6 @@ fun ProNotesAppRoot(
           onEmptyTrash = viewModel::emptyTrash,
           onResetAllDataToDefaults = viewModel::clearAllLocalStorage,
           onNavigateBack = viewModel::closeSettingsScreen,
-          onReplayOnboarding = viewModel::replayOnboardingDebug,
         )
       }
 
@@ -490,12 +501,6 @@ fun ProNotesAppRoot(
         notebookTitle = lockedDoc?.title ?: "Locked Vault Notebook",
         onAttemptUnlock = { pin -> viewModel.attemptUnlockVaultNotebook(pendingVaultId, pin) },
         onDismiss = viewModel::dismissPendingVaultUnlock,
-      )
-    }
-
-    if (uiState.isOnboardingVisible) {
-      OnboardingScreen(
-        onStartCreating = viewModel::completeOnboarding,
       )
     }
   }

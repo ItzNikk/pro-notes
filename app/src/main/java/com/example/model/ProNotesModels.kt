@@ -78,6 +78,10 @@ enum class PrimaryTool(val label: String) {
   ERASER("Eraser"),
   LASSO("Lasso"),
   SHAPE("Shapes"),
+  TEXT("Text"),
+  IMAGE("Images"),
+  ELEMENTS("Elements"),
+  STICKY_NOTE("Note"),
   LASER("Laser"),
 }
 
@@ -155,10 +159,12 @@ enum class ActivePopover {
   ERASER_SETTINGS,
   SHAPE_SETTINGS,
   LASSO_SETTINGS,
+  ELEMENTS_PICKER,
   TIME_KEEPER,
   TOOLBAR_CUSTOMIZE,
   NEW_NOTE_DIALOG,
   ADD_PAGE_DIALOG,
+  AI_HANDWRITING_ASSIST,
   EXPORT_SHARE,
   SECURITY_VAULT,
 }
@@ -222,32 +228,10 @@ data class DrawnStroke(
   val timestampMs: Long = System.currentTimeMillis(),
 )
 
-data class LaserTrailPoint(
-  val position: Offset,
-  val timestampMs: Long,
-  val strokeId: Int,
-)
-
 data class LaserTrailStroke(
   val id: String = java.util.UUID.randomUUID().toString(),
   val points: List<Offset>,
-  val color: Color = Color(0xFFFF2D55),
   val createdAtMs: Long = System.currentTimeMillis(),
-)
-
-data class PendingCircleLassoLoop(
-  val id: String = java.util.UUID.randomUUID().toString(),
-  val firstPoint: Offset,
-  val lastPoint: Offset,
-  val loopBounds: androidx.compose.ui.geometry.Rect,
-  val points: List<Offset>,
-  val pressures: List<Float> = emptyList(),
-  val color: Color,
-  val strokeWidth: Float,
-  val subTool: WritingSubTool,
-  val penStyle: PenStyle,
-  val expiryTimeMs: Long,
-  val isActivated: Boolean = false,
 )
 
 data class StudyTapeItem(
@@ -471,90 +455,75 @@ class LassoShape(private val poly: List<Offset>) {
   }
 }
 
-fun computePointsBounds(points: List<Offset>): androidx.compose.ui.geometry.Rect {
-  if (points.isEmpty()) return androidx.compose.ui.geometry.Rect.Zero
-  var minX = Float.MAX_VALUE
-  var maxX = -Float.MAX_VALUE
-  var minY = Float.MAX_VALUE
-  var maxY = -Float.MAX_VALUE
-  for (p in points) {
-    if (p.x < minX) minX = p.x
-    if (p.x > maxX) maxX = p.x
-    if (p.y < minY) minY = p.y
-    if (p.y > maxY) maxY = p.y
-  }
-  return androidx.compose.ui.geometry.Rect(minX, minY, maxX, maxY)
-}
-
-fun isClosedCircleLoop(points: List<Offset>, zoomScale: Float = 1f): Boolean {
-  if (points.size < 14) return false
-  val safeZoom = zoomScale.coerceIn(0.25f, 5f)
-  val invZoom = 1f / safeZoom
-  val bounds = computePointsBounds(points)
-  val width = bounds.width
-  val height = bounds.height
-  val diag = hypot(width, height)
-
-  // Reject tiny circles (handwriting letters like 'o' or 'a') and straight lines
-  if (width < 46f * invZoom || height < 46f * invZoom || diag < 86f * invZoom) return false
-  val aspect = minOf(width, height) / maxOf(width, height).coerceAtLeast(1f)
-  if (aspect < 0.24f) return false
-
-  val closureDistance = (points.last() - points.first()).getDistance()
-  val maxAllowedClosure = maxOf(diag * 0.34f, 38f * invZoom)
-  if (closureDistance > maxAllowedClosure) return false
-
-  var pathLen = 0f
-  var signedArea2 = 0f
-  for (i in 1 until points.size) {
-    val prev = points[i - 1]
-    val curr = points[i]
-    pathLen += (curr - prev).getDistance()
-    signedArea2 += (prev.x * curr.y - curr.x * prev.y)
-  }
-  val first = points.first()
-  val last = points.last()
-  signedArea2 += (last.x * first.y - first.x * last.y)
-
-  if (pathLen !in (diag * 1.85f)..(diag * 4.4f)) return false
-
-  // Ensure enclosed area is meaningful relative to bounding box (rejects back-and-forth lines)
-  val enclosedArea = kotlin.math.abs(signedArea2) * 0.5f
-  val boxArea = width * height
-  return enclosedArea >= boxArea * 0.28f
-}
-
-fun isPointNearPendingLoopEndpoint(
-  point: Offset,
-  loop: PendingCircleLassoLoop,
-  zoomScale: Float = 1f,
-): Boolean {
-  val safeZoom = zoomScale.coerceIn(0.25f, 5f)
-  val invZoom = 1f / safeZoom
-  val diag = hypot(loop.loopBounds.width, loop.loopBounds.height)
-  val threshold = maxOf(42f * invZoom, (diag * 0.22f).coerceAtMost(76f * invZoom))
-  val dFirst = (point - loop.firstPoint).getDistance()
-  val dLast = (point - loop.lastPoint).getDistance()
-  return dFirst <= threshold || dLast <= threshold
-}
-
 /**
- * Rotates/reverses a closed loop's points so index 0 is the endpoint closest to [holdPoint],
- * preserving the continuous path around the loop once and closing back to index 0.
+ * Detects a hand-drawn closed shape (circle, blob, rounded box, triangle...) and returns the
+ * polygon that encloses the area, or null when the stroke is not a closed loop.
+ *
+ * A loop counts as closed when the pen ends close to where it started OR when the end of the
+ * stroke crosses back over an earlier part of it (people usually overshoot a little). In the
+ * overshoot case only the enclosed part is returned.
  */
-fun orderLoopPointsFromEndpoint(
-  loop: PendingCircleLassoLoop,
-  holdPoint: Offset,
-): List<Offset> {
-  val pts = loop.points
-  if (pts.size < 3) return pts
-  val dFirst = (holdPoint - loop.firstPoint).getDistance()
-  val dLast = (holdPoint - loop.lastPoint).getDistance()
-  val ordered = if (dLast < dFirst) pts.asReversed() else pts
-  return if ((ordered.last() - ordered.first()).getDistance() > 2f) {
-    ordered + ordered.first()
-  } else {
-    ordered
+fun closedLoopPolygon(points: List<Offset>): List<Offset>? {
+  if (points.size < 10) return null
+  val diag = hypot(points.maxOf { it.x } - points.minOf { it.x }, points.maxOf { it.y } - points.minOf { it.y })
+  if (diag < 90f) return null // ignore handwriting-sized loops
+  var pathLen = 0f
+  for (i in 1 until points.size) pathLen += (points[i] - points[i - 1]).getDistance()
+  if (pathLen < diag * 1.5f) return null // a line or an arc, not something that goes around
+
+  var polygon: List<Offset>? = null
+
+  // 1) The tail of the stroke crosses an earlier part of it.
+  val tailStart = (points.size / 2).coerceAtLeast(4)
+  search@ for (j in points.lastIndex downTo tailStart) {
+    for (i in 0 until j - 3) {
+      val hit = segmentIntersection(points[i], points[i + 1], points[j - 1], points[j]) ?: continue
+      polygon = listOf(hit) + points.subList(i + 1, j)
+      break@search
+    }
   }
+
+  // 2) The pen ended near where it started.
+  if (polygon == null) {
+    val gap = (points.last() - points.first()).getDistance()
+    if (gap <= maxOf(diag * 0.22f, 40f)) polygon = points
+  }
+
+  val poly = polygon ?: return null
+  if (poly.size < 8) return null
+
+  val minX = poly.minOf { it.x }
+  val maxX = poly.maxOf { it.x }
+  val minY = poly.minOf { it.y }
+  val maxY = poly.maxOf { it.y }
+  val w = maxX - minX
+  val h = maxY - minY
+  if (hypot(w, h) < 80f) return null
+
+  // Reject thin back-and-forth scribbles that happen to cross themselves.
+  var twiceArea = 0f
+  for (i in poly.indices) {
+    val a = poly[i]
+    val b = poly[(i + 1) % poly.size]
+    twiceArea += a.x * b.y - b.x * a.y
+  }
+  val area = kotlin.math.abs(twiceArea) / 2f
+  if (area < w * h * 0.2f) return null
+  return poly
 }
 
+fun isClosedCircleLoop(points: List<Offset>): Boolean = closedLoopPolygon(points) != null
+
+private fun segmentIntersection(a: Offset, b: Offset, c: Offset, d: Offset): Offset? {
+  val rx = b.x - a.x
+  val ry = b.y - a.y
+  val sx = d.x - c.x
+  val sy = d.y - c.y
+  val denom = rx * sy - ry * sx
+  if (kotlin.math.abs(denom) < 1e-6f) return null
+  val qpx = c.x - a.x
+  val qpy = c.y - a.y
+  val t = (qpx * sy - qpy * sx) / denom
+  val u = (qpx * ry - qpy * rx) / denom
+  return if (t in 0f..1f && u in 0f..1f) Offset(a.x + t * rx, a.y + t * ry) else null
+}
