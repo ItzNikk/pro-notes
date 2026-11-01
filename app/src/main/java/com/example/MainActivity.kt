@@ -81,6 +81,7 @@ import com.example.ui.components.TemplatePreviewCanvas
 import com.example.ui.components.UnlockVaultDialog
 import com.example.ui.screens.DocumentsScreen
 import com.example.ui.screens.EditorScreen
+import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.LocalProNotesColors
 import com.example.ui.theme.MyApplicationTheme
@@ -133,6 +134,17 @@ fun ProNotesAppRoot(
   val context = LocalContext.current
   val lifecycleOwner = LocalLifecycleOwner.current
   val ioScope = rememberCoroutineScope()
+
+  val onboardingPrefs = remember(context) {
+    context.getSharedPreferences("pro_notes_onboarding_prefs", android.content.Context.MODE_PRIVATE)
+  }
+  var showOnboarding by remember {
+    mutableStateOf(!onboardingPrefs.getBoolean("has_seen_onboarding_v2", false))
+  }
+  val completeOnboarding = {
+    onboardingPrefs.edit().putBoolean("has_seen_onboarding_v2", true).apply()
+    showOnboarding = false
+  }
 
   // Stage 2F: Dynamically enforce or clear FLAG_SECURE on the Activity window when Privacy Screen Shield changes
   LaunchedEffect(uiState.privacyScreenShieldEnabled) {
@@ -263,7 +275,15 @@ fun ProNotesAppRoot(
         .background(colors.background)
         .windowInsetsPadding(WindowInsets.safeDrawing),
   ) {
-    when (uiState.screenMode) {
+    if (showOnboarding) {
+      OnboardingScreen(
+        onStartCreating = { completeOnboarding() },
+        onTakeTour = {
+          completeOnboarding()
+          viewModel.startInteractiveTour()
+        },
+      )
+    } else when (uiState.screenMode) {
       ScreenMode.DOCUMENTS -> {
         val breadcrumbs =
           remember(uiState.folders, uiState.currentFolderId) {
@@ -290,7 +310,8 @@ fun ProNotesAppRoot(
             )
           },
           onImportPdfDocument = { pdfPickerLauncher.launch(arrayOf("application/pdf")) },
-          onCreateFolder = { name, _ -> viewModel.createFolder(name) },
+          onCreateFolder = { name, colorArgb -> viewModel.createFolder(name, colorArgb) },
+          onUpdateFolderColor = viewModel::updateFolderColor,
           onNavigateToFolder = viewModel::navigateToFolder,
           onNavigateUpFolder = viewModel::navigateUpFolder,
           onRenameFolder = viewModel::renameFolder,
@@ -333,6 +354,14 @@ fun ProNotesAppRoot(
           holdToErase = uiState.holdToErase,
           privacyScreenShieldEnabled = uiState.privacyScreenShieldEnabled,
           watermarkConfidentialExports = uiState.watermarkConfidentialExports,
+          selectedStylusBrand = uiState.selectedStylusBrand,
+          stylusBarrelAction = uiState.stylusBarrelAction,
+          stylusPressureSensitivity = uiState.stylusPressureSensitivity,
+          stylusTiltShadingEnabled = uiState.stylusTiltShadingEnabled,
+          stylusHoverCursorEnabled = uiState.stylusHoverCursorEnabled,
+          stylusTailEraserEnabled = uiState.stylusTailEraserEnabled,
+          developerUpiId = uiState.developerUpiId,
+          developerDisplayName = uiState.developerDisplayName,
           activeNotebookCount = activeDocs.size,
           activeFolderCount = activeFolders,
           trashedNotebookCount = trashedDocs,
@@ -360,9 +389,21 @@ fun ProNotesAppRoot(
           onToggleHoldToErase = viewModel::toggleHoldToErase,
           onTogglePrivacyScreenShield = viewModel::togglePrivacyScreenShield,
           onToggleWatermarkConfidentialExports = viewModel::toggleWatermarkConfidentialExports,
+          onSelectStylusBrand = viewModel::selectStylusBrand,
+          onSelectStylusBarrelAction = viewModel::selectStylusBarrelAction,
+          onUpdateStylusPressureSensitivity = viewModel::updateStylusPressureSensitivity,
+          onToggleStylusTiltShading = viewModel::toggleStylusTiltShading,
+          onToggleStylusHoverCursor = viewModel::toggleStylusHoverCursor,
+          onToggleStylusTailEraser = viewModel::toggleStylusTailEraser,
+          onUpdateDeveloperUpiInfo = viewModel::updateDeveloperUpiInfo,
+          onStartInteractiveTour = viewModel::startInteractiveTour,
           onEmptyTrash = viewModel::emptyTrash,
           onResetAllDataToDefaults = viewModel::clearAllLocalStorage,
           onNavigateBack = viewModel::closeSettingsScreen,
+          onReplayOnboarding = {
+            onboardingPrefs.edit().putBoolean("has_seen_onboarding_v2", false).apply()
+            showOnboarding = true
+          },
         )
       }
 

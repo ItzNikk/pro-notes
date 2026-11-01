@@ -1749,3 +1749,197 @@ fun UnlockVaultDialog(
     }
   }
 }
+
+@Composable
+fun AudioRecordingTimelineBar(
+  isRecording: Boolean,
+  isPlayingReplay: Boolean,
+  recordedSeconds: Int,
+  strokeCount: Int,
+  onToggleRecord: () -> Unit,
+  onToggleReplay: () -> Unit,
+  onCloseAudioBar: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  val minutes = recordedSeconds / 60
+  val seconds = recordedSeconds % 60
+  val formattedTime = String.format("%02d:%02d", minutes, seconds)
+
+  Row(
+    modifier =
+      modifier
+        .fillMaxWidth()
+        .height(44.dp)
+        .background(PopoverInnerBg)
+        .padding(horizontal = 16.dp),
+    verticalAlignment = Alignment.CenterVertically,
+    horizontalArrangement = Arrangement.SpaceBetween,
+  ) {
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Box(
+        modifier =
+          Modifier
+            .size(32.dp)
+            .clip(CircleShape)
+            .background(if (isRecording) DangerRed else PopoverCardSelected)
+            .clickable(onClick = onToggleRecord)
+            .testTag("toggle_audio_record_button"),
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = if (isRecording) Icons.Filled.Pause else Icons.Filled.FiberManualRecord,
+          contentDescription = if (isRecording) "Pause Recording" else "Record Audio",
+          tint = if (isRecording) Color.White else DangerRed,
+          modifier = Modifier.size(16.dp),
+        )
+      }
+      Text(
+        text = formattedTime,
+        color = TextPrimaryWhite,
+        fontSize = 13.sp,
+        fontWeight = FontWeight.Medium,
+      )
+      if (strokeCount > 0) {
+        Text(
+          text = "• $strokeCount strokes sync'd",
+          color = TextSecondaryGray,
+          fontSize = 12.sp,
+        )
+      }
+    }
+
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      Box(
+        modifier =
+          Modifier
+            .size(32.dp)
+            .clip(CircleShape)
+            .background(PopoverCardSelected)
+            .clickable(onClick = onToggleReplay)
+            .testTag("toggle_audio_replay_button"),
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = if (isPlayingReplay) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+          contentDescription = if (isPlayingReplay) "Pause Replay" else "Replay Audio",
+          tint = TextPrimaryWhite,
+          modifier = Modifier.size(16.dp),
+        )
+      }
+      Box(
+        modifier =
+          Modifier
+            .size(32.dp)
+            .clip(CircleShape)
+            .background(PopoverCardSelected)
+            .clickable(onClick = onCloseAudioBar)
+            .testTag("close_audio_bar_button"),
+        contentAlignment = Alignment.Center,
+      ) {
+        Icon(
+          imageVector = Icons.Filled.Close,
+          contentDescription = "Close Audio Bar",
+          tint = TextSecondaryGray,
+          modifier = Modifier.size(16.dp),
+        )
+      }
+    }
+  }
+}
+
+@Composable
+fun AiHandwritingAssistPopover(
+  strokeCount: Int,
+  onInsertConvertedTextBox: (String) -> Unit,
+  onDismiss: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Box(
+    modifier =
+      modifier
+        .width(320.dp)
+        .shadow(16.dp, RoundedCornerShape(16.dp))
+        .clip(RoundedCornerShape(16.dp))
+        .background(PopoverBg)
+        .border(1.dp, PopoverDivider, RoundedCornerShape(16.dp))
+        .padding(16.dp)
+        .testTag("ai_handwriting_assist_popover")
+  ) {
+    Column {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Outlined.AutoAwesome,
+            contentDescription = null,
+            tint = SwitchBlue,
+            modifier = Modifier.size(20.dp),
+          )
+          Text(
+            text = "AI Handwriting Assist",
+            color = TextPrimaryWhite,
+            fontSize = 15.sp,
+            fontWeight = FontWeight.SemiBold,
+          )
+        }
+        Box(
+          modifier =
+            Modifier
+              .size(28.dp)
+              .clip(CircleShape)
+              .background(PopoverCardSelected)
+              .clickable(onClick = onDismiss),
+          contentAlignment = Alignment.Center,
+        ) {
+          Icon(
+            imageVector = Icons.Filled.Close,
+            contentDescription = "Dismiss",
+            tint = TextSecondaryGray,
+            modifier = Modifier.size(16.dp),
+          )
+        }
+      }
+      Spacer(modifier = Modifier.height(12.dp))
+      Text(
+        text = if (strokeCount > 0) "$strokeCount strokes ready for conversion or cleanup." else "No handwritten strokes detected on this page.",
+        color = TextSecondaryGray,
+        fontSize = 12.sp,
+      )
+      Spacer(modifier = Modifier.height(16.dp))
+      Box(
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .height(38.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (strokeCount > 0) SwitchBlue else PopoverCardSelected)
+            .clickable(enabled = strokeCount > 0) {
+              onInsertConvertedTextBox("Converted Handwriting")
+              onDismiss()
+            }
+            .testTag("convert_handwriting_button"),
+        contentAlignment = Alignment.Center,
+      ) {
+        Text(
+          text = "Convert Handwriting to Text",
+          color = if (strokeCount > 0) Color.White else TextSecondaryGray,
+          fontSize = 13.sp,
+          fontWeight = FontWeight.Medium,
+        )
+      }
+    }
+  }
+}
+

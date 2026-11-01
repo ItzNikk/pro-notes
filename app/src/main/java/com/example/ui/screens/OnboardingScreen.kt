@@ -66,22 +66,23 @@ private data class TourSlide(
 private val OnboardingTourSlides =
   listOf(
     TourSlide(
-      title = "Fluid Stylus & Ink",
-      body = "Write naturally with pressure-sensitive pen, pencil, and highlighter tools. Hold your stylus side button anytime to erase Effortlessly.",
+      title = "1. Fluid Stylus & Ink",
+      body = "Write naturally with pressure-sensitive pen, pencil, and highlighter tools. Hold your stylus side button anytime to erase effortlessly.",
     ),
     TourSlide(
-      title = "Smart Circle to Select",
-      body = "Draw a closed loop with your pen or pencil, lift, and briefly hold on the loop endpoint to transform it into a live Lasso selection.",
+      title = "2. Live Geometric Shapes Studio",
+      body = "Pick any of 11 shapes to drag-draw live on the canvas, or sketch freehand and hold for 350ms to auto-snap into a crisp editable shape.",
     ),
     TourSlide(
-      title = "Color-Coded Folders & Search",
-      body = "Organize notebooks and PDFs inside custom-colored folders and find any note or folder as you type.",
+      title = "3. Smart Circle to Select & Color Laser",
+      body = "Draw a closed loop and hold to transform it into a live Lasso selection, or use the Color Laser pointer with any toolbar color.",
     ),
   )
 
 @Composable
 fun OnboardingScreen(
   onStartCreating: () -> Unit,
+  onTakeTour: () -> Unit = onStartCreating,
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
@@ -376,7 +377,7 @@ fun OnboardingScreen(
             )
           }
 
-          // Secondary button: "Take a tour"
+          // Secondary button: "Take a tour" -> Opens interactive hands-on canvas tour!
           Box(
             modifier =
               Modifier
@@ -386,25 +387,13 @@ fun OnboardingScreen(
                 .background(Color.White.copy(alpha = 0.12f))
                 .border(1.dp, Color.White.copy(alpha = 0.24f), RoundedCornerShape(14.dp))
                 .clickable {
-                  if (!showTourOverlay) {
-                    showTourOverlay = true
-                    tourStepIndex = 0
-                  } else if (tourStepIndex < OnboardingTourSlides.lastIndex) {
-                    tourStepIndex += 1
-                  } else {
-                    onStartCreating()
-                  }
+                  onTakeTour()
                 }
                 .testTag("onboarding_take_a_tour_button"),
             contentAlignment = Alignment.Center,
           ) {
             Text(
-              text =
-                when {
-                  !showTourOverlay -> "Take a tour"
-                  tourStepIndex < OnboardingTourSlides.lastIndex -> "Next tip"
-                  else -> "Done tour"
-                },
+              text = "Take a tour",
               color = Color.White,
               fontSize = 15.sp,
               fontWeight = FontWeight.Medium,

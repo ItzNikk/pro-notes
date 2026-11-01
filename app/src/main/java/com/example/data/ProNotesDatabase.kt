@@ -88,6 +88,7 @@ data class FolderEntity(
   @PrimaryKey val id: String,
   val name: String,
   val parentFolderId: String? = null,
+  val colorArgb: Long = 0xFF4C8DF6L,
   val createdAtEpochMs: Long,
   val updatedAtEpochMs: Long,
   val isTrashed: Boolean = false,
@@ -164,7 +165,7 @@ interface CustomTemplateDao {
 
 @Database(
   entities = [NotebookEntity::class, FolderEntity::class, CustomTemplateEntity::class],
-  version = 2,
+  version = 3,
   exportSchema = false,
 )
 abstract class ProNotesDatabase : RoomDatabase() {
@@ -221,6 +222,17 @@ abstract class ProNotesDatabase : RoomDatabase() {
         }
       }
 
+    val MIGRATION_2_3 =
+      object : Migration(2, 3) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+          runCatching {
+            db.execSQL(
+              "ALTER TABLE folders ADD COLUMN colorArgb INTEGER NOT NULL DEFAULT 4283207158"
+            )
+          }
+        }
+      }
+
     fun getInstance(context: Context): ProNotesDatabase {
       return INSTANCE
         ?: synchronized(this) {
@@ -230,7 +242,8 @@ abstract class ProNotesDatabase : RoomDatabase() {
                 ProNotesDatabase::class.java,
                 "pronotes_local_v3.db",
               )
-              .addMigrations(MIGRATION_1_2)
+              .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+              .fallbackToDestructiveMigration()
               .build()
           INSTANCE = instance
           instance
@@ -381,6 +394,7 @@ class NotebookRepository(
           id = it.id,
           name = it.name,
           parentFolderId = it.parentFolderId,
+          colorArgb = if (it.colorArgb == 0L) 0xFF4C8DF6L else (it.colorArgb or 0xFF000000L),
           createdAtEpochMs = it.createdAtEpochMs,
           updatedAtEpochMs = it.updatedAtEpochMs,
           isTrashed = it.isTrashed,
@@ -453,6 +467,7 @@ class NotebookRepository(
           id = folder.id,
           name = folder.name,
           parentFolderId = folder.parentFolderId,
+          colorArgb = folder.colorArgb or 0xFF000000L,
           createdAtEpochMs = folder.createdAtEpochMs,
           updatedAtEpochMs = folder.updatedAtEpochMs,
           isTrashed = folder.isTrashed,

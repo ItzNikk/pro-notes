@@ -207,6 +207,9 @@ fun PrimaryToolCustomIcon(
           )
         }
       }
+      else -> {
+        // Fallback for TEXT, IMAGE, ELEMENTS, STICKY_NOTE
+      }
     }
   }
 }

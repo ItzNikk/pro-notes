@@ -135,6 +135,7 @@ fun DocumentsScreen(
   onCreateNewWhiteboard: () -> Unit = {},
   onImportPdfDocument: () -> Unit = {},
   onCreateFolder: (String, Long) -> Unit = { _, _ -> },
+  onUpdateFolderColor: (String, Long) -> Unit = { _, _ -> },
   onNavigateToFolder: (String?) -> Unit = {},
   onNavigateUpFolder: () -> Unit = {},
   onRenameFolder: (String, String) -> Unit = { _, _ -> },
@@ -745,6 +746,9 @@ fun DocumentsScreen(
                   renameTarget = true to folder.id
                   renameInitialTitle = folder.name
                 },
+                onChangeFolderColor = { newColorArgb ->
+                  onUpdateFolderColor(folder.id, newColorArgb)
+                },
                 onMoveFolder = {
                   moveTarget = true to folder.id
                 },
@@ -796,6 +800,9 @@ fun DocumentsScreen(
                 onRenameFolder = {
                   renameTarget = true to folder.id
                   renameInitialTitle = folder.name
+                },
+                onChangeFolderColor = { newColorArgb ->
+                  onUpdateFolderColor(folder.id, newColorArgb)
                 },
                 onMoveFolder = { moveTarget = true to folder.id },
                 onMoveToTrash = { onMoveFolderToTrash(folder.id) },
@@ -1096,6 +1103,21 @@ private fun NewNotebookDashedCard(
   }
 }
 
+private val FolderPresetColors =
+  listOf(
+    0xFF4C8DF6L,
+    0xFFFFCA28L,
+    0xFF26A69AL,
+    0xFFAB47BCL,
+    0xFFEF5350L,
+    0xFF66BB6AL,
+    0xFFEC407AL,
+    0xFFFF7043L,
+  )
+
+private fun folderColorFromArgb(argb: Long): Color =
+  Color(((if (argb == 0L) 0xFF4C8DF6L else argb) or 0xFF000000L).toInt())
+
 @Composable
 private fun FolderGridCard(
   folder: FolderItem,
@@ -1103,6 +1125,7 @@ private fun FolderGridCard(
   matchingNotebookTitles: List<String> = emptyList(),
   onOpenFolder: () -> Unit,
   onRenameFolder: () -> Unit,
+  onChangeFolderColor: (Long) -> Unit = {},
   onMoveFolder: () -> Unit,
   onMoveToTrash: () -> Unit,
   onRestoreFromTrash: () -> Unit,
@@ -1110,7 +1133,7 @@ private fun FolderGridCard(
 ) {
   val colors = LocalProNotesColors.current
   var showMenu by remember { mutableStateOf(false) }
-  val folderColor = Color(folder.colorArgb)
+  val folderColor = folderColorFromArgb(folder.colorArgb)
 
   Column(
     horizontalAlignment = Alignment.CenterHorizontally,
@@ -1120,19 +1143,34 @@ private fun FolderGridCard(
         .clickable(onClick = onOpenFolder)
         .testTag("folder_card_${folder.id}"),
   ) {
-    // Main visual element: One large folder icon tinted with the chosen folder color
+    // Main visual element: Tinted folder card with vibrant folder icon and color accent bar
     Box(
       modifier =
         Modifier
           .width(142.dp)
-          .height(186.dp),
+          .height(186.dp)
+          .clip(RoundedCornerShape(14.dp))
+          .background(folderColor.copy(alpha = 0.14f))
+          .border(1.5.dp, folderColor.copy(alpha = 0.42f), RoundedCornerShape(14.dp)),
       contentAlignment = Alignment.Center,
     ) {
       Icon(
         imageVector = Icons.Default.Folder,
         contentDescription = folder.name,
         tint = folderColor,
-        modifier = Modifier.size(128.dp),
+        modifier = Modifier.size(116.dp),
+      )
+
+      // Color badge dot at bottom-start
+      Box(
+        modifier =
+          Modifier
+            .align(Alignment.BottomStart)
+            .padding(10.dp)
+            .size(12.dp)
+            .clip(CircleShape)
+            .background(folderColor)
+            .border(1.5.dp, Color.White.copy(alpha = 0.85f), CircleShape),
       )
 
       // Context menu button at top-end
@@ -1145,13 +1183,14 @@ private fun FolderGridCard(
         Icon(
           imageVector = Icons.Default.MoreVert,
           contentDescription = "Folder Options",
-          tint = colors.textSecondary,
+          tint = colors.textPrimary,
           modifier =
             Modifier
-              .size(22.dp)
+              .size(24.dp)
               .clip(CircleShape)
+              .background(colors.surface.copy(alpha = 0.65f))
               .clickable { showMenu = true }
-              .padding(2.dp)
+              .padding(3.dp)
               .testTag("folder_menu_${folder.id}"),
         )
         DropdownMenu(
@@ -1177,6 +1216,42 @@ private fun FolderGridCard(
                 onRenameFolder()
               },
             )
+            // Inline quick folder color switcher inside menu
+            Column(
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            ) {
+              Text(
+                text = "FOLDER COLOR",
+                color = colors.textSecondary,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+              )
+              Spacer(modifier = Modifier.height(6.dp))
+              Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+              ) {
+                FolderPresetColors.take(6).forEach { presetArgb ->
+                  val isCurrent = (folder.colorArgb or 0xFF000000L) == (presetArgb or 0xFF000000L)
+                  Box(
+                    modifier =
+                      Modifier
+                        .size(22.dp)
+                        .clip(CircleShape)
+                        .background(folderColorFromArgb(presetArgb))
+                        .border(
+                          width = if (isCurrent) 2.dp else 1.dp,
+                          color = if (isCurrent) Color.White else Color.Transparent,
+                          shape = CircleShape,
+                        )
+                        .clickable {
+                          onChangeFolderColor(presetArgb)
+                          showMenu = false
+                        },
+                  )
+                }
+              }
+            }
             DropdownMenuItem(
               text = { Text("Move to Folder...", color = colors.textPrimary, fontSize = 13.sp) },
               leadingIcon = {
@@ -1525,19 +1600,21 @@ private fun FolderListRow(
   itemCount: Int,
   onOpenFolder: () -> Unit,
   onRenameFolder: () -> Unit,
+  onChangeFolderColor: (Long) -> Unit = {},
   onMoveFolder: () -> Unit,
   onMoveToTrash: () -> Unit,
   onRestoreFromTrash: () -> Unit,
   onDeletePermanently: () -> Unit,
 ) {
   val colors = LocalProNotesColors.current
+  val folderColor = folderColorFromArgb(folder.colorArgb)
   Row(
     modifier =
       Modifier
         .fillMaxWidth()
         .clip(RoundedCornerShape(12.dp))
         .background(colors.surfaceVariant)
-        .border(1.dp, colors.border, RoundedCornerShape(12.dp))
+        .border(1.dp, folderColor.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
         .clickable(onClick = onOpenFolder)
         .padding(horizontal = 14.dp, vertical = 10.dp),
     verticalAlignment = Alignment.CenterVertically,
@@ -1551,7 +1628,7 @@ private fun FolderListRow(
       Icon(
         imageVector = Icons.Default.Folder,
         contentDescription = null,
-        tint = Color(folder.colorArgb),
+        tint = folderColor,
         modifier = Modifier.size(30.dp),
       )
       Column {
@@ -1569,8 +1646,22 @@ private fun FolderListRow(
       }
     }
 
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
       if (!folder.isTrashed) {
+        // Cycle folder color dot button
+        Box(
+          modifier =
+            Modifier
+              .size(18.dp)
+              .clip(CircleShape)
+              .background(folderColor)
+              .border(1.5.dp, Color.White.copy(alpha = 0.8f), CircleShape)
+              .clickable {
+                val currIdx = FolderPresetColors.indexOfFirst { (it or 0xFF000000L) == (folder.colorArgb or 0xFF000000L) }
+                val nextColor = FolderPresetColors[(currIdx + 1).coerceAtLeast(0) % FolderPresetColors.size]
+                onChangeFolderColor(nextColor)
+              },
+        )
         Icon(
           imageVector = Icons.Default.Edit,
           contentDescription = "Rename",
@@ -1765,15 +1856,7 @@ private fun CreateFolderModalDialog(
 ) {
   val colors = LocalProNotesColors.current
   var folderName by remember { mutableStateOf("") }
-  val folderColorOptions =
-    listOf(
-      0xFF4C8DF6L,
-      0xFFFFCA28L,
-      0xFF26A69AL,
-      0xFFAB47BCL,
-      0xFFEF5350L,
-      0xFF66BB6AL,
-    )
+  val folderColorOptions = FolderPresetColors
   var selectedColorIdx by remember { mutableIntStateOf(0) }
   var useCustomColor by remember { mutableStateOf(false) }
   var customHue by remember { mutableFloatStateOf(215f) }
@@ -1784,11 +1867,11 @@ private fun CreateFolderModalDialog(
     remember(customHue, customSaturation, customValue) {
       val rgbInt =
         android.graphics.Color.HSVToColor(floatArrayOf(customHue, customSaturation, customValue))
-      rgbInt.toLong() and 0xFFFFFFFFL
+      (rgbInt.toLong() and 0xFFFFFFFFL) or 0xFF000000L
     }
 
   val resolvedColorArgb =
-    if (useCustomColor) customColorArgb else folderColorOptions[selectedColorIdx]
+    ((if (useCustomColor) customColorArgb else folderColorOptions[selectedColorIdx]) or 0xFF000000L)
 
   Box(
     modifier =
@@ -1824,8 +1907,8 @@ private fun CreateFolderModalDialog(
         Icon(
           imageVector = Icons.Default.Folder,
           contentDescription = null,
-          tint = Color(resolvedColorArgb),
-          modifier = Modifier.size(34.dp),
+          tint = folderColorFromArgb(resolvedColorArgb),
+          modifier = Modifier.size(36.dp),
         )
       }
       Spacer(modifier = Modifier.height(12.dp))
@@ -1854,16 +1937,16 @@ private fun CreateFolderModalDialog(
       Spacer(modifier = Modifier.height(8.dp))
       Row(
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        folderColorOptions.forEachIndexed { idx, argb ->
+        folderColorOptions.take(6).forEachIndexed { idx, argb ->
           val isSel = !useCustomColor && selectedColorIdx == idx
           Box(
             modifier =
               Modifier
                 .size(28.dp)
                 .clip(CircleShape)
-                .background(Color(argb))
+                .background(folderColorFromArgb(argb))
                 .border(
                   width = if (isSel) 2.5.dp else 1.dp,
                   color = if (isSel) Color.White else Color.Transparent,
@@ -1883,7 +1966,7 @@ private fun CreateFolderModalDialog(
             Modifier
               .height(28.dp)
               .clip(RoundedCornerShape(14.dp))
-              .background(if (useCustomColor) Color(customColorArgb) else colors.surfaceVariant)
+              .background(if (useCustomColor) folderColorFromArgb(customColorArgb) else colors.surfaceVariant)
               .border(
                 width = if (useCustomColor) 2.dp else 1.dp,
                 color = if (useCustomColor) Color.White else colors.border,
@@ -1925,8 +2008,8 @@ private fun CreateFolderModalDialog(
             valueRange = 0f..360f,
             colors =
               SliderDefaults.colors(
-                thumbColor = Color(customColorArgb),
-                activeTrackColor = Color(customColorArgb),
+                thumbColor = folderColorFromArgb(customColorArgb),
+                activeTrackColor = folderColorFromArgb(customColorArgb),
               ),
             modifier = Modifier.height(28.dp).testTag("folder_custom_hue_slider"),
           )
@@ -1943,8 +2026,8 @@ private fun CreateFolderModalDialog(
             valueRange = 0.2f..1f,
             colors =
               SliderDefaults.colors(
-                thumbColor = Color(customColorArgb),
-                activeTrackColor = Color(customColorArgb),
+                thumbColor = folderColorFromArgb(customColorArgb),
+                activeTrackColor = folderColorFromArgb(customColorArgb),
               ),
             modifier = Modifier.height(28.dp).testTag("folder_custom_saturation_slider"),
           )
@@ -2137,7 +2220,7 @@ private fun MoveToFolderModalDialog(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
           ) {
-            Icon(Icons.Default.Folder, contentDescription = null, tint = Color(folder.colorArgb))
+            Icon(Icons.Default.Folder, contentDescription = null, tint = folderColorFromArgb(folder.colorArgb))
             Text(folder.name, color = colors.textPrimary, fontSize = 13.5.sp)
           }
         }

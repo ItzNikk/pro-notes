@@ -1183,8 +1183,12 @@ fun EraserSettingsPopover(
 
 @Composable
 fun ShapeSettingsPopover(
+  selectedShapeKind: ShapeKind = ShapeKind.RECTANGLE,
+  shapeAutoDetectMode: Boolean = true,
   lastAutoDetectedShape: ShapeKind?,
   fillShapes: Boolean,
+  onSelectShapeForDraw: (ShapeKind) -> Unit = {},
+  onToggleShapeAutoDetect: (Boolean) -> Unit = {},
   onInsertQuickShape: (ShapeKind) -> Unit,
   onToggleFillShapes: (Boolean) -> Unit,
   modifier: Modifier = Modifier,
@@ -1192,7 +1196,7 @@ fun ShapeSettingsPopover(
   Column(
     modifier =
       modifier
-        .width(316.dp)
+        .width(332.dp)
         .shadow(16.dp, RoundedCornerShape(16.dp))
         .clip(RoundedCornerShape(16.dp))
         .background(PopoverBg)
@@ -1206,32 +1210,60 @@ fun ShapeSettingsPopover(
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Text(
-        text = "Goodnotes Auto-Shapes (11 Shapes)",
+        text = "Shape Studio (11 Geometries)",
         color = TextPrimaryWhite,
         fontSize = 14.5.sp,
         fontWeight = FontWeight.SemiBold,
       )
-      Box(
+      Row(
         modifier =
           Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(SwitchBlue.copy(alpha = 0.22f))
-            .padding(horizontal = 8.dp, vertical = 3.dp),
+            .clip(RoundedCornerShape(8.dp))
+            .background(PopoverInnerBg)
+            .padding(2.dp),
       ) {
-        Text(
-          text = "Auto-Detect ON",
-          color = Color(0xFF67C8EB),
-          fontSize = 10.sp,
-          fontWeight = FontWeight.Bold,
-        )
+        Box(
+          modifier =
+            Modifier
+              .clip(RoundedCornerShape(6.dp))
+              .background(if (shapeAutoDetectMode) SwitchBlue else Color.Transparent)
+              .clickable { onToggleShapeAutoDetect(true) }
+              .padding(horizontal = 8.dp, vertical = 4.dp),
+        ) {
+          Text(
+            text = "Auto-Snap",
+            color = Color.White,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+          )
+        }
+        Box(
+          modifier =
+            Modifier
+              .clip(RoundedCornerShape(6.dp))
+              .background(if (!shapeAutoDetectMode) SwitchBlue else Color.Transparent)
+              .clickable { onToggleShapeAutoDetect(false) }
+              .padding(horizontal = 8.dp, vertical = 4.dp),
+        ) {
+          Text(
+            text = "Drag Shape",
+            color = Color.White,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+          )
+        }
       }
     }
 
-    Spacer(modifier = Modifier.height(4.dp))
+    Spacer(modifier = Modifier.height(6.dp))
 
     Text(
       text =
-        "Draw freehand — automatically recognizes Lines, Arrows, Curves, Circles, Ovals, Triangles, Rectangles, Diamonds, Pentagons, Hexagons & Stars!",
+        if (shapeAutoDetectMode) {
+          "Freehand Auto-Snap: Sketch any shape and it snaps into crisp geometry. Or pick a shape below to drag-draw directly."
+        } else {
+          "Direct Drag Mode: Drag across the page to draw a live ${selectedShapeKind.label} with adjustable handles."
+        },
       color = TextSecondaryGray,
       fontSize = 10.5.sp,
     )
@@ -1248,7 +1280,7 @@ fun ShapeSettingsPopover(
           modifier = Modifier.size(15.dp),
         )
         Text(
-          text = "Last recognized: ${lastAutoDetectedShape.label}",
+          text = "Last created: ${lastAutoDetectedShape.label}",
           color = Color(0xFF67C8EB),
           fontSize = 11.sp,
           fontWeight = FontWeight.SemiBold,
@@ -1259,7 +1291,7 @@ fun ShapeSettingsPopover(
     Spacer(modifier = Modifier.height(8.dp))
 
     PopoverToggleRow(
-      label = "Fill Shape Color (Semi-Transparent)",
+      label = "Fill Closed Shapes (Translucent Tint)",
       checked = fillShapes,
       onCheckedChange = onToggleFillShapes,
       testTag = "shape_fill_switch",
@@ -1268,7 +1300,7 @@ fun ShapeSettingsPopover(
     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = PopoverDivider)
 
     Text(
-      text = "QUICK-STAMP PERFECT SHAPE (11 GEOMETRIES)",
+      text = "SELECT SHAPE TO DRAG-DRAW ON PAGE",
       color = TextSecondaryGray,
       fontSize = 9.5.sp,
       fontWeight = FontWeight.Medium,
@@ -1283,21 +1315,27 @@ fun ShapeSettingsPopover(
           horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
           rowShapes.forEach { kind ->
+            val isActive = !shapeAutoDetectMode && selectedShapeKind == kind
             Row(
               modifier =
                 Modifier
                   .weight(1f)
-                  .height(34.dp)
+                  .height(36.dp)
                   .clip(RoundedCornerShape(8.dp))
-                  .background(PopoverCardSelected)
-                  .clickable { onInsertQuickShape(kind) }
+                  .background(if (isActive) SwitchBlue.copy(alpha = 0.28f) else PopoverCardSelected)
+                  .border(
+                    width = if (isActive) 1.5.dp else 0.dp,
+                    color = if (isActive) SwitchBlue else Color.Transparent,
+                    shape = RoundedCornerShape(8.dp),
+                  )
+                  .clickable { onSelectShapeForDraw(kind) }
                   .padding(horizontal = 4.dp),
               verticalAlignment = Alignment.CenterVertically,
               horizontalArrangement = Arrangement.Center,
             ) {
               ShapeKindPreviewIcon(
                 kind = kind,
-                tint = Color(0xFF67C8EB),
+                tint = if (isActive) Color.White else Color(0xFF67C8EB),
                 modifier = Modifier.size(13.dp),
               )
               Spacer(modifier = Modifier.width(3.dp))
@@ -1305,12 +1343,33 @@ fun ShapeSettingsPopover(
                 text = kind.label.substringBefore(" "),
                 color = Color.White,
                 fontSize = 9.5.sp,
-                fontWeight = FontWeight.Medium,
+                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Medium,
               )
             }
           }
         }
       }
+    }
+
+    Spacer(modifier = Modifier.height(10.dp))
+
+    Box(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .height(34.dp)
+          .clip(RoundedCornerShape(8.dp))
+          .background(SwitchBlue)
+          .clickable { onInsertQuickShape(selectedShapeKind) }
+          .testTag("stamp_selected_shape_button"),
+      contentAlignment = Alignment.Center,
+    ) {
+      Text(
+        text = "Stamp ${selectedShapeKind.label} on Page",
+        color = Color.White,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.SemiBold,
+      )
     }
   }
 }

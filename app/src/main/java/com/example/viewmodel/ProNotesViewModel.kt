@@ -110,9 +110,20 @@ data class ProNotesUiState(
   val eraserRadius: Float = 28f,
   val eraserAutoDeselect: Boolean = false,
   val selectedShapeKind: ShapeKind = ShapeKind.RECTANGLE,
+  val shapeAutoDetectMode: Boolean = true,
   val lastAutoDetectedShape: ShapeKind? = null,
   val fillShapes: Boolean = true,
   val activeShapeEditStrokeId: String? = null,
+  val selectedStylusBrand: com.example.model.StylusPenBrand = com.example.model.StylusPenBrand.SAMSUNG_S_PEN,
+  val stylusBarrelAction: com.example.model.StylusBarrelAction = com.example.model.StylusBarrelAction.ERASE_WHILE_HELD,
+  val stylusPressureSensitivity: Float = 1.0f,
+  val stylusTiltShadingEnabled: Boolean = true,
+  val stylusHoverCursorEnabled: Boolean = true,
+  val stylusTailEraserEnabled: Boolean = true,
+  val developerUpiId: String = "itznikk@upi",
+  val developerDisplayName: String = "ItzNikk",
+  val showInteractiveTour: Boolean = false,
+  val interactiveTourStep: Int = 0,
   val laserMode: LaserMode = LaserMode.FADING_TRAIL,
   val lassoFilters: LassoFilterSettings = LassoFilterSettings(),
   val selectedThicknessIndex: Int = 1,
@@ -304,6 +315,26 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         DefaultCustomPalette
       }
 
+    val stylusBrandName =
+      prefs.getString("stylus_pen_brand", com.example.model.StylusPenBrand.SAMSUNG_S_PEN.name)
+        ?: com.example.model.StylusPenBrand.SAMSUNG_S_PEN.name
+    val stylusBrand =
+      runCatching { com.example.model.StylusPenBrand.valueOf(stylusBrandName) }
+        .getOrDefault(com.example.model.StylusPenBrand.SAMSUNG_S_PEN)
+    val barrelActionName =
+      prefs.getString("stylus_barrel_action", com.example.model.StylusBarrelAction.ERASE_WHILE_HELD.name)
+        ?: com.example.model.StylusBarrelAction.ERASE_WHILE_HELD.name
+    val barrelAction =
+      runCatching { com.example.model.StylusBarrelAction.valueOf(barrelActionName) }
+        .getOrDefault(com.example.model.StylusBarrelAction.ERASE_WHILE_HELD)
+    val pressureSens = prefs.getFloat("stylus_pressure_sensitivity", 1.0f).coerceIn(0.5f, 1.6f)
+    val tiltShading = prefs.getBoolean("stylus_tilt_shading", true)
+    val hoverCursor = prefs.getBoolean("stylus_hover_cursor", true)
+    val tailEraser = prefs.getBoolean("stylus_tail_eraser", true)
+    val shapeAutoDetect = prefs.getBoolean("shape_auto_detect_mode", true)
+    val devUpiId = prefs.getString("developer_upi_id", "itznikk@upi")?.ifBlank { "itznikk@upi" } ?: "itznikk@upi"
+    val devDisplayName = prefs.getString("developer_display_name", "ItzNikk")?.ifBlank { "ItzNikk" } ?: "ItzNikk"
+
     return ProNotesUiState(
       appThemeMode = themeMode,
       libraryViewMode = viewMode,
@@ -317,6 +348,15 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       privacyScreenShieldEnabled = privacyShield,
       pullToAddPage = pullAdd,
       eraserAutoDeselect = autoDeselectEraser,
+      shapeAutoDetectMode = shapeAutoDetect,
+      selectedStylusBrand = stylusBrand,
+      stylusBarrelAction = barrelAction,
+      stylusPressureSensitivity = pressureSens,
+      stylusTiltShadingEnabled = tiltShading,
+      stylusHoverCursorEnabled = hoverCursor,
+      stylusTailEraserEnabled = tailEraser,
+      developerUpiId = devUpiId,
+      developerDisplayName = devDisplayName,
       quickSwatches = loadedSwatches,
       customPalette = loadedPalette,
       selectedColor = loadedSwatches.firstOrNull() ?: SwatchRoyalBlue,
@@ -542,15 +582,18 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
 
   fun createFolder(
     name: String,
+    colorArgb: Long = 0xFF4C8DF6L,
     parentFolderId: String? = _uiState.value.currentFolderId,
   ) {
     val trimmed = name.trim().ifBlank { "Untitled Folder" }
+    val resolvedColor = if (colorArgb == 0L) 0xFF4C8DF6L else (colorArgb or 0xFF000000L)
     val now = System.currentTimeMillis()
     val folder =
       FolderItem(
         id = "fld_$now",
         name = trimmed,
         parentFolderId = parentFolderId,
+        colorArgb = resolvedColor,
         createdAtEpochMs = now,
         updatedAtEpochMs = now,
         isTrashed = false,
@@ -562,6 +605,26 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       )
     }
     viewModelScope.launch { repository.saveFolder(folder) }
+  }
+
+  fun updateFolderColor(folderId: String, colorArgb: Long) {
+    val resolvedColor = if (colorArgb == 0L) 0xFF4C8DF6L else (colorArgb or 0xFF000000L)
+    var updatedFolder: FolderItem? = null
+    _uiState.update { state ->
+      val nextFolders =
+        state.folders.map { f ->
+          if (f.id == folderId) {
+            f.copy(colorArgb = resolvedColor, updatedAtEpochMs = System.currentTimeMillis()).also {
+              updatedFolder = it
+            }
+          } else f
+        }
+      state.copy(
+        folders = nextFolders,
+        statusToastMessage = "Updated folder color",
+      )
+    }
+    updatedFolder?.let { folder -> viewModelScope.launch { repository.saveFolder(folder) } }
   }
 
   fun renameFolder(folderId: String, newName: String) {
@@ -1318,6 +1381,155 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
 
   fun selectShapeKind(kind: ShapeKind) {
     _uiState.update { it.copy(selectedShapeKind = kind) }
+  }
+
+  fun setShapeAutoDetectMode(enabled: Boolean) {
+    prefs.edit().putBoolean("shape_auto_detect_mode", enabled).apply()
+    _uiState.update { it.copy(shapeAutoDetectMode = enabled) }
+  }
+
+  fun selectShapeForDirectDraw(kind: ShapeKind) {
+    prefs.edit().putBoolean("shape_auto_detect_mode", false).apply()
+    _uiState.update {
+      it.copy(
+        selectedShapeKind = kind,
+        shapeAutoDetectMode = false,
+      )
+    }
+  }
+
+  fun clearActiveShapeEdit() {
+    _uiState.update { it.copy(activeShapeEditStrokeId = null) }
+  }
+
+  fun selectShapeAtPoint(point: Offset): Boolean {
+    val state = _uiState.value
+    val page = state.notebooks.find { it.id == state.activeTabId }?.currentPage ?: return false
+    val hitShape =
+      page.strokes.asReversed().firstOrNull { stroke ->
+        stroke.isShape && isStrokeHitByPoint(stroke, point, 20f)
+      }
+    if (hitShape != null) {
+      _uiState.update {
+        it.copy(
+          activeShapeEditStrokeId = hitShape.id,
+          selectedShapeKind = hitShape.shapeKind ?: it.selectedShapeKind,
+        )
+      }
+      return true
+    }
+    if (state.activeShapeEditStrokeId != null) {
+      _uiState.update { it.copy(activeShapeEditStrokeId = null) }
+    }
+    return false
+  }
+
+  fun moveEntireShapeStroke(strokeId: String, delta: Offset) {
+    if (delta == Offset.Zero) return
+    var savedDoc: NotebookDocument? = null
+    _uiState.update { state ->
+      val (updatedNotebooks, modifiedDoc) =
+        updateCurrentPage(state) { page ->
+          page.copy(
+            strokes =
+              page.strokes.map { stroke ->
+                if (stroke.id != strokeId || !stroke.isShape) stroke
+                else {
+                  stroke.copy(
+                    points = stroke.points.map { it + delta },
+                    shapeControlPoints = stroke.shapeControlPoints.map { it + delta },
+                  )
+                }
+              }
+          )
+        }
+      savedDoc = modifiedDoc
+      state.copy(notebooks = updatedNotebooks)
+    }
+    persistDocumentAsync(savedDoc)
+  }
+
+  fun toggleActiveShapeFill() {
+    var savedDoc: NotebookDocument? = null
+    _uiState.update { state ->
+      val targetId = state.activeShapeEditStrokeId ?: return@update state
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Toggle shape fill")
+      val (updatedNotebooks, modifiedDoc) =
+        updateCurrentPage(state) { page ->
+          page.copy(
+            strokes =
+              page.strokes.map { stroke ->
+                if (stroke.id != targetId || !stroke.isShape) stroke
+                else {
+                  val canFill =
+                    stroke.shapeKind != ShapeKind.LINE &&
+                      stroke.shapeKind != ShapeKind.ARROW &&
+                      stroke.shapeKind != ShapeKind.CURVE
+                  stroke.copy(shapeFill = if (canFill) !stroke.shapeFill else false)
+                }
+              }
+          )
+        }
+      savedDoc = modifiedDoc
+      state.copy(
+        notebooks = updatedNotebooks,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
+      )
+    }
+    persistDocumentAsync(savedDoc)
+  }
+
+  fun duplicateActiveShape() {
+    var savedDoc: NotebookDocument? = null
+    _uiState.update { state ->
+      val targetId = state.activeShapeEditStrokeId ?: return@update state
+      val currentPage =
+        state.notebooks.find { it.id == state.activeTabId }?.currentPage ?: return@update state
+      val source = currentPage.strokes.find { it.id == targetId && it.isShape } ?: return@update state
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Duplicate shape")
+      val shift = Offset(28f, 28f)
+      val copyId = java.util.UUID.randomUUID().toString()
+      val copyStroke =
+        source.copy(
+          id = copyId,
+          points = source.points.map { it + shift },
+          shapeControlPoints = source.shapeControlPoints.map { it + shift },
+        )
+      val (updatedNotebooks, modifiedDoc) =
+        updateCurrentPage(state) { page ->
+          page.copy(strokes = page.strokes + copyStroke)
+        }
+      savedDoc = modifiedDoc
+      state.copy(
+        notebooks = updatedNotebooks,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
+        activeShapeEditStrokeId = copyId,
+        statusToastMessage = "Duplicated ${source.shapeKind?.label ?: "Shape"}",
+      )
+    }
+    persistDocumentAsync(savedDoc)
+  }
+
+  fun deleteActiveShape() {
+    var savedDoc: NotebookDocument? = null
+    _uiState.update { state ->
+      val targetId = state.activeShapeEditStrokeId ?: return@update state
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Delete shape")
+      val (updatedNotebooks, modifiedDoc) =
+        updateCurrentPage(state) { page ->
+          page.copy(strokes = page.strokes.filterNot { it.id == targetId })
+        }
+      savedDoc = modifiedDoc
+      state.copy(
+        notebooks = updatedNotebooks,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
+        activeShapeEditStrokeId = null,
+      )
+    }
+    persistDocumentAsync(savedDoc)
   }
 
   /**
@@ -2603,7 +2815,11 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
 
       val detectedShapeKind =
         if (isShapeStroke) {
-          autoDetectShapeKind(finalPoints)
+          if (!snappedFromHold && !state.shapeAutoDetectMode) {
+            state.selectedShapeKind
+          } else {
+            autoDetectShapeKind(finalPoints)
+          }
         } else null
 
       val (geomPoints, controlPts) =
@@ -3255,7 +3471,11 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   fun addLaserTrail(points: List<Offset>) {
     if (points.size < 2) return
     _uiState.update { state ->
-      val trail = com.example.model.LaserTrailStroke(points = points)
+      val trail =
+        com.example.model.LaserTrailStroke(
+          points = points,
+          color = state.selectedColor,
+        )
       state.copy(laserTrails = (state.laserTrails + trail).takeLast(40))
     }
   }
@@ -4080,6 +4300,175 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
 
   fun toggleSortOrder() {
     _uiState.update { it.copy(sortByDateAscending = !it.sortByDateAscending) }
+  }
+
+  fun selectStylusBrand(brand: com.example.model.StylusPenBrand) {
+    prefs
+      .edit()
+      .putString("stylus_pen_brand", brand.name)
+      .putFloat("stylus_pressure_sensitivity", brand.defaultPressureCurve)
+      .putBoolean("stylus_tilt_shading", brand.supportsTilt)
+      .putBoolean("stylus_tail_eraser", brand.supportsTailEraser)
+      .apply()
+    _uiState.update {
+      it.copy(
+        selectedStylusBrand = brand,
+        stylusPressureSensitivity = brand.defaultPressureCurve,
+        stylusTiltShadingEnabled = brand.supportsTilt,
+        stylusTailEraserEnabled = brand.supportsTailEraser,
+        statusToastMessage = "Applied ${brand.label} profile",
+      )
+    }
+  }
+
+  fun selectStylusBarrelAction(action: com.example.model.StylusBarrelAction) {
+    prefs.edit().putString("stylus_barrel_action", action.name).apply()
+    val holdEraseEnabled = action == com.example.model.StylusBarrelAction.ERASE_WHILE_HELD
+    prefs.edit().putBoolean("hold_to_erase", holdEraseEnabled).apply()
+    _uiState.update {
+      it.copy(
+        stylusBarrelAction = action,
+        holdToErase = holdEraseEnabled,
+      )
+    }
+  }
+
+  fun updateStylusPressureSensitivity(value: Float) {
+    val clamped = value.coerceIn(0.5f, 1.6f)
+    prefs.edit().putFloat("stylus_pressure_sensitivity", clamped).apply()
+    _uiState.update { it.copy(stylusPressureSensitivity = clamped) }
+  }
+
+  fun toggleStylusTiltShading(enabled: Boolean) {
+    prefs.edit().putBoolean("stylus_tilt_shading", enabled).apply()
+    _uiState.update { it.copy(stylusTiltShadingEnabled = enabled) }
+  }
+
+  fun toggleStylusHoverCursor(enabled: Boolean) {
+    prefs.edit().putBoolean("stylus_hover_cursor", enabled).apply()
+    _uiState.update { it.copy(stylusHoverCursorEnabled = enabled) }
+  }
+
+  fun toggleStylusTailEraser(enabled: Boolean) {
+    prefs.edit().putBoolean("stylus_tail_eraser", enabled).apply()
+    _uiState.update { it.copy(stylusTailEraserEnabled = enabled) }
+  }
+
+  fun updateDeveloperUpiInfo(upiId: String, displayName: String = _uiState.value.developerDisplayName) {
+    val cleanUpi = upiId.trim().ifBlank { "itznikk@upi" }
+    val cleanName = displayName.trim().ifBlank { "ItzNikk" }
+    prefs
+      .edit()
+      .putString("developer_upi_id", cleanUpi)
+      .putString("developer_display_name", cleanName)
+      .apply()
+    _uiState.update {
+      it.copy(
+        developerUpiId = cleanUpi,
+        developerDisplayName = cleanName,
+        statusToastMessage = "Saved UPI ID: $cleanUpi",
+      )
+    }
+  }
+
+  fun startInteractiveTour() {
+    val state = _uiState.value
+    if (state.notebooks.none { !it.isTrashed }) {
+      createNewNotebook(
+        title = "Interactive Tour Sandbox",
+        coverStyle = NotebookCoverStyle.CHARCOAL_DARK,
+        paperTemplate = PaperTemplate.DOTTED,
+        paperColorTheme = PaperColorTheme.PURE_WHITE,
+      )
+    } else {
+      val targetDoc =
+        state.notebooks.find { it.id == state.activeTabId && !it.isTrashed }
+          ?: state.notebooks.first { !it.isTrashed }
+      openDocument(targetDoc.id)
+    }
+    applyInteractiveTourStepTool(0)
+  }
+
+  fun advanceInteractiveTourStep() {
+    val nextStep = _uiState.value.interactiveTourStep + 1
+    if (nextStep >= 5) {
+      dismissInteractiveTour()
+      _uiState.update {
+        it.copy(statusToastMessage = "Tour complete! You're ready to create.")
+      }
+    } else {
+      applyInteractiveTourStepTool(nextStep)
+    }
+  }
+
+  fun previousInteractiveTourStep() {
+    val prevStep = (_uiState.value.interactiveTourStep - 1).coerceAtLeast(0)
+    applyInteractiveTourStepTool(prevStep)
+  }
+
+  private fun applyInteractiveTourStepTool(step: Int) {
+    _uiState.update { state ->
+      when (step) {
+        0 ->
+          state.copy(
+            screenMode = ScreenMode.EDITOR,
+            showInteractiveTour = true,
+            interactiveTourStep = 0,
+            primaryTool = PrimaryTool.WRITING_TOOLS,
+            activeWritingSubTool = WritingSubTool.PEN,
+            activePopover = ActivePopover.NONE,
+          )
+        1 ->
+          state.copy(
+            screenMode = ScreenMode.EDITOR,
+            showInteractiveTour = true,
+            interactiveTourStep = 1,
+            primaryTool = PrimaryTool.SHAPE,
+            shapeAutoDetectMode = false,
+            selectedShapeKind = ShapeKind.STAR,
+            fillShapes = true,
+            activePopover = ActivePopover.NONE,
+          )
+        2 ->
+          state.copy(
+            screenMode = ScreenMode.EDITOR,
+            showInteractiveTour = true,
+            interactiveTourStep = 2,
+            primaryTool = PrimaryTool.WRITING_TOOLS,
+            activeWritingSubTool = WritingSubTool.PEN,
+            circleToLasso = true,
+            activePopover = ActivePopover.NONE,
+          )
+        3 ->
+          state.copy(
+            screenMode = ScreenMode.EDITOR,
+            showInteractiveTour = true,
+            interactiveTourStep = 3,
+            primaryTool = PrimaryTool.LASER,
+            laserMode = LaserMode.FADING_TRAIL,
+            activePopover = ActivePopover.NONE,
+          )
+        else ->
+          state.copy(
+            screenMode = ScreenMode.EDITOR,
+            showInteractiveTour = true,
+            interactiveTourStep = 4,
+            primaryTool = PrimaryTool.ERASER,
+            activePopover = ActivePopover.NONE,
+          )
+      }
+    }
+  }
+
+  fun dismissInteractiveTour() {
+    _uiState.update {
+      it.copy(
+        showInteractiveTour = false,
+        interactiveTourStep = 0,
+        primaryTool = PrimaryTool.WRITING_TOOLS,
+        activeWritingSubTool = WritingSubTool.PEN,
+      )
+    }
   }
 }
 

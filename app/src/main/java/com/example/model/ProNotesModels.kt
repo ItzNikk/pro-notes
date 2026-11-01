@@ -231,8 +231,260 @@ data class DrawnStroke(
 data class LaserTrailStroke(
   val id: String = java.util.UUID.randomUUID().toString(),
   val points: List<Offset>,
+  val color: Color = Color(0xFFFF1744),
   val createdAtMs: Long = System.currentTimeMillis(),
 )
+
+enum class StylusPenBrand(
+  val label: String,
+  val subtitle: String,
+  val badge: String,
+  val supportsSideButton: Boolean = true,
+  val supportsTailEraser: Boolean = true,
+  val supportsTilt: Boolean = true,
+  val defaultPressureCurve: Float = 1.0f,
+) {
+  SAMSUNG_S_PEN(
+    label = "Samsung S Pen",
+    subtitle = "Galaxy Tab S / S Ultra · Wacom EMR · 4096 pressure levels & side button",
+    badge = "S PEN",
+    supportsSideButton = true,
+    supportsTailEraser = false,
+    supportsTilt = true,
+    defaultPressureCurve = 1.0f,
+  ),
+  XIAOMI_SMART_PEN(
+    label = "Xiaomi Smart Pen (Gen 1 & 2)",
+    subtitle = "Xiaomi Pad 5 / 6 / 7 · Dual primary & secondary side buttons · 240Hz",
+    badge = "XIAOMI",
+    supportsSideButton = true,
+    supportsTailEraser = false,
+    supportsTilt = true,
+    defaultPressureCurve = 1.05f,
+  ),
+  ONEPLUS_STYLO(
+    label = "OnePlus Stylo / OPPO Pencil",
+    subtitle = "OnePlus Pad / Pad 2 · Low-latency haptic ink & side button erase",
+    badge = "STYLO",
+    supportsSideButton = true,
+    supportsTailEraser = false,
+    supportsTilt = true,
+    defaultPressureCurve = 1.0f,
+  ),
+  LENOVO_PRECISION_PEN(
+    label = "Lenovo Precision / Tab Pen Plus",
+    subtitle = "Lenovo Tab P11 / P12 / Extreme · Barrel button & tail eraser support",
+    badge = "LENOVO",
+    supportsSideButton = true,
+    supportsTailEraser = true,
+    supportsTilt = true,
+    defaultPressureCurve = 0.95f,
+  ),
+  HUAWEI_M_PENCIL(
+    label = "Huawei M-Pencil (2nd & 3rd Gen)",
+    subtitle = "MatePad Pro / Air · NearLink / 4096 pressure levels & tilt shading",
+    badge = "M-PENCIL",
+    supportsSideButton = true,
+    supportsTailEraser = false,
+    supportsTilt = true,
+    defaultPressureCurve = 1.0f,
+  ),
+  USI_STYLUS(
+    label = "USI 2.0 Stylus (Pixel / Chromebook)",
+    subtitle = "Pixel Tablet & USI 2.0 devices · Tail eraser & barrel button",
+    badge = "USI 2.0",
+    supportsSideButton = true,
+    supportsTailEraser = true,
+    supportsTilt = true,
+    defaultPressureCurve = 1.05f,
+  ),
+  GENERIC_STYLUS(
+    label = "Universal Active / Capacitive Pen",
+    subtitle = "Standard Android stylus protocol with velocity-assisted pressure",
+    badge = "UNIVERSAL",
+    supportsSideButton = true,
+    supportsTailEraser = true,
+    supportsTilt = false,
+    defaultPressureCurve = 1.15f,
+  ),
+}
+
+enum class StylusBarrelAction(val label: String, val description: String) {
+  ERASE_WHILE_HELD("Hold to Erase", "Temporarily activates Eraser while holding the side button"),
+  LASSO_WHILE_HELD("Hold for Lasso", "Temporarily selects strokes with Lasso while held"),
+  LASER_WHILE_HELD("Hold for Laser", "Temporarily activates Laser pointer while held"),
+  IGNORE("Disabled", "Ignore side button presses to prevent accidental switches"),
+}
+
+fun buildShapePreviewPoints(
+  points: List<Offset>,
+  kind: ShapeKind,
+): Pair<List<Offset>, List<Offset>> {
+  if (points.size < 2) return points to emptyList()
+  val first = points.first()
+  val last = points.last()
+  val minX = minOf(first.x, last.x).let { if (points.size > 4) minOf(it, points.minOf { p -> p.x }) else it }
+  val maxX = maxOf(first.x, last.x).let { if (points.size > 4) maxOf(it, points.maxOf { p -> p.x }) else it }
+  val minY = minOf(first.y, last.y).let { if (points.size > 4) minOf(it, points.minOf { p -> p.y }) else it }
+  val maxY = maxOf(first.y, last.y).let { if (points.size > 4) maxOf(it, points.maxOf { p -> p.y }) else it }
+  val cx = (minX + maxX) / 2f
+  val cy = (minY + maxY) / 2f
+  val rx = ((maxX - minX) / 2f).coerceAtLeast(18f)
+  val ry = ((maxY - minY) / 2f).coerceAtLeast(18f)
+
+  return when (kind) {
+    ShapeKind.LINE -> {
+      val linePts = (0..24).map { idx ->
+        val t = idx / 24f
+        Offset(first.x + (last.x - first.x) * t, first.y + (last.y - first.y) * t)
+      }
+      linePts to listOf(first, last)
+    }
+    ShapeKind.ARROW -> {
+      val dx = last.x - first.x
+      val dy = last.y - first.y
+      val len = kotlin.math.hypot(dx, dy).coerceAtLeast(1f)
+      val ux = dx / len
+      val uy = dy / len
+      val headLen = (len * 0.22f).coerceIn(22f, 44f)
+      val wingAngle = Math.toRadians(28.0)
+      val cosA = kotlin.math.cos(wingAngle).toFloat()
+      val sinA = kotlin.math.sin(wingAngle).toFloat()
+      val leftWing = Offset(
+        last.x - headLen * (ux * cosA - uy * sinA),
+        last.y - headLen * (uy * cosA + ux * sinA),
+      )
+      val rightWing = Offset(
+        last.x - headLen * (ux * cosA + uy * sinA),
+        last.y - headLen * (uy * cosA - ux * sinA),
+      )
+      val shaftPts = (0..18).map { idx ->
+        val t = idx / 18f
+        Offset(first.x + dx * t, first.y + dy * t)
+      }
+      (shaftPts + listOf(leftWing, last, rightWing)) to listOf(first, last)
+    }
+    ShapeKind.CURVE -> {
+      val mid = points[points.size / 2]
+      val ctrl = Offset(
+        x = (mid.x * 1.35f - (first.x + last.x) * 0.175f),
+        y = (mid.y * 1.35f - (first.y + last.y) * 0.175f),
+      )
+      val curvePts = (0..36).map { idx ->
+        val t = idx / 36f
+        val inv = 1f - t
+        Offset(
+          x = inv * inv * first.x + 2f * inv * t * ctrl.x + t * t * last.x,
+          y = inv * inv * first.y + 2f * inv * t * ctrl.y + t * t * last.y,
+        )
+      }
+      curvePts to listOf(first, ctrl, last)
+    }
+    ShapeKind.CIRCLE -> {
+      val r = maxOf(rx, ry)
+      val circlePts = (0..48).map { idx ->
+        val angle = (idx.toDouble() / 48.0) * 2.0 * Math.PI
+        Offset(
+          x = cx + (r * kotlin.math.cos(angle)).toFloat(),
+          y = cy + (r * kotlin.math.sin(angle)).toFloat(),
+        )
+      }
+      val handles = listOf(
+        Offset(cx, cy - r),
+        Offset(cx + r, cy),
+        Offset(cx, cy + r),
+        Offset(cx - r, cy),
+      )
+      circlePts to handles
+    }
+    ShapeKind.OVAL -> {
+      val ovalPts = (0..48).map { idx ->
+        val angle = (idx.toDouble() / 48.0) * 2.0 * Math.PI
+        Offset(
+          x = cx + (rx * kotlin.math.cos(angle)).toFloat(),
+          y = cy + (ry * kotlin.math.sin(angle)).toFloat(),
+        )
+      }
+      val handles = listOf(
+        Offset(cx, cy - ry),
+        Offset(cx + rx, cy),
+        Offset(cx, cy + ry),
+        Offset(cx - rx, cy),
+      )
+      ovalPts to handles
+    }
+    ShapeKind.RECTANGLE -> {
+      val tl = Offset(cx - rx, cy - ry)
+      val tr = Offset(cx + rx, cy - ry)
+      val br = Offset(cx + rx, cy + ry)
+      val bl = Offset(cx - rx, cy + ry)
+      val vertices = listOf(tl, tr, br, bl)
+      interpolateClosedPolygon(vertices, 10) to vertices
+    }
+    ShapeKind.TRIANGLE -> {
+      val top = Offset(cx, cy - ry)
+      val br = Offset(cx + rx, cy + ry)
+      val bl = Offset(cx - rx, cy + ry)
+      val vertices = listOf(top, br, bl)
+      interpolateClosedPolygon(vertices, 12) to vertices
+    }
+    ShapeKind.DIAMOND -> {
+      val top = Offset(cx, cy - ry)
+      val right = Offset(cx + rx, cy)
+      val bottom = Offset(cx, cy + ry)
+      val left = Offset(cx - rx, cy)
+      val vertices = listOf(top, right, bottom, left)
+      interpolateClosedPolygon(vertices, 10) to vertices
+    }
+    ShapeKind.PENTAGON -> {
+      val vertices = (0 until 5).map { idx ->
+        val angle = -Math.PI / 2.0 + idx * (2.0 * Math.PI / 5.0)
+        Offset(
+          x = cx + (rx * kotlin.math.cos(angle)).toFloat(),
+          y = cy + (ry * kotlin.math.sin(angle)).toFloat(),
+        )
+      }
+      interpolateClosedPolygon(vertices, 8) to vertices
+    }
+    ShapeKind.HEXAGON -> {
+      val vertices = (0 until 6).map { idx ->
+        val angle = -Math.PI / 2.0 + idx * (2.0 * Math.PI / 6.0)
+        Offset(
+          x = cx + (rx * kotlin.math.cos(angle)).toFloat(),
+          y = cy + (ry * kotlin.math.sin(angle)).toFloat(),
+        )
+      }
+      interpolateClosedPolygon(vertices, 8) to vertices
+    }
+    ShapeKind.STAR -> {
+      val vertices = (0 until 10).map { idx ->
+        val isOuter = idx % 2 == 0
+        val factor = if (isOuter) 1.0f else 0.42f
+        val angle = -Math.PI / 2.0 + idx * (Math.PI / 5.0)
+        Offset(
+          x = cx + (rx * factor * kotlin.math.cos(angle)).toFloat(),
+          y = cy + (ry * factor * kotlin.math.sin(angle)).toFloat(),
+        )
+      }
+      interpolateClosedPolygon(vertices, 5) to vertices
+    }
+  }
+}
+
+private fun interpolateClosedPolygon(vertices: List<Offset>, stepsPerEdge: Int): List<Offset> {
+  if (vertices.size < 2) return vertices
+  val result = ArrayList<Offset>(vertices.size * stepsPerEdge + 1)
+  for (i in vertices.indices) {
+    val a = vertices[i]
+    val b = vertices[(i + 1) % vertices.size]
+    for (step in 0 until stepsPerEdge) {
+      val t = step.toFloat() / stepsPerEdge
+      result.add(Offset(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t))
+    }
+  }
+  result.add(vertices.first())
+  return result
+}
 
 data class StudyTapeItem(
   val id: String = java.util.UUID.randomUUID().toString(),
