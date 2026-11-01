@@ -2,6 +2,9 @@ package com.example.ui.screens
 
 import android.view.MotionEvent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.Canvas
@@ -55,8 +58,6 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.outlined.CenterFocusStrong
 import androidx.compose.material.icons.outlined.Colorize
 import androidx.compose.material.icons.outlined.ContentPaste
-import androidx.compose.material.icons.outlined.GraphicEq
-import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material.icons.outlined.OpenInFull
 import androidx.compose.material.icons.outlined.PanTool
 import androidx.compose.material.icons.outlined.PictureAsPdf
@@ -74,6 +75,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -118,9 +120,9 @@ import com.example.model.ActivePopover
 import com.example.model.CustomPageTemplate
 import com.example.model.DocumentType
 import com.example.model.DrawnStroke
-import com.example.model.ElementStampType
 import com.example.model.EraserMode
-import com.example.model.LaserTrailStroke
+import com.example.model.LaserMode
+import com.example.model.LaserTrailPoint
 import com.example.model.LassoFilterSettings
 import com.example.model.LassoShape
 import com.example.model.NotePage
@@ -137,11 +139,9 @@ import com.example.model.StrokePattern
 import com.example.model.ToolbarDockPosition
 import com.example.model.WritingSubTool
 import com.example.model.isClosedCircleLoop
+import com.example.model.isPointNearPendingLoopEndpoint
 import com.example.ui.components.AddPageDocumentIcon
-import com.example.ui.components.AiHandwritingAssistPopover
-import com.example.ui.components.AudioRecordingTimelineBar
 import com.example.ui.components.DottedColorRingIcon
-import com.example.ui.components.ElementsPickerPopover
 import com.example.ui.components.EraserSettingsPopover
 import com.example.ui.components.ExportAndSharePopover
 import com.example.ui.components.ExportShareBoxIcon
@@ -261,15 +261,15 @@ fun EditorScreen(
   val rulerState = uiState.rulerState
   val isZoomWindowVisible = uiState.isZoomWindowVisible
   val zoomTargetBoxOffset = uiState.zoomTargetBoxOffset
-  val isAudioRecording = uiState.isRecordingAudio
-  val isAudioPlayingReplay = uiState.isPlayingAudioReplay
-  val audioRecordedSeconds = uiState.recordedAudioSeconds
-  val isAudioBarVisible = uiState.isAudioBarVisible
-  val laserTrails = uiState.laserTrails
+  val laserMode = uiState.laserMode
+  val laserColor = uiState.laserColor
+  val pendingCircleLoop = uiState.pendingCircleLoop
+  val circleLassoConversionToken = uiState.circleLassoConversionToken
+  val convertingCircleLassoColor = uiState.convertingCircleLassoColor
+  val convertingCircleLassoWidth = uiState.convertingCircleLassoWidth
   val isEyedropperActive = uiState.isEyedropperActive
   val privacyScreenShieldEnabled = uiState.privacyScreenShieldEnabled
   val watermarkConfidentialExports = uiState.watermarkConfidentialExports
-  val statusToastMessage = uiState.statusToastMessage
   val customTemplates = uiState.customTemplates
 
   val activeDocument =
@@ -344,15 +344,12 @@ fun EditorScreen(
   val onScaleSelection: () -> Unit = viewModel::scaleSelectedStrokes
   val onBringToFront: () -> Unit = viewModel::bringSelectionToFront
   val onSendToBack: () -> Unit = viewModel::sendSelectionToBack
-  val onInsertElementStamp: (ElementStampType) -> Unit = viewModel::insertElementStamp
   val onMoveElementStamp: (String, Offset) -> Unit = viewModel::moveElementStamp
-  val onAddTextBoxAt: (Offset, String) -> Unit = viewModel::addTextBoxAt
   val onUpdateTextBox: (String, String) -> Unit = viewModel::updateTextBox
   val onMoveTextBox: (String, Offset) -> Unit = viewModel::moveTextBox
   val onMoveInsertedImage: (String, Offset) -> Unit = viewModel::moveCanvasImage
   val onResizeInsertedImage: (String, Float) -> Unit = viewModel::resizeCanvasImage
   val onDeleteInsertedImage: (String) -> Unit = viewModel::deleteCanvasImage
-  val onAddStickyNoteAt: (Offset) -> Unit = viewModel::addStickyNoteAt
   val onToggleStickyNoteExpanded: (String) -> Unit = viewModel::toggleStickyNoteExpanded
   val onUpdateStickyNoteText: (String, String) -> Unit = viewModel::updateStickyNoteText
   val onDeleteStickyNote: (String) -> Unit = viewModel::deleteStickyNote
@@ -361,16 +358,20 @@ fun EditorScreen(
   val onRotateRuler: (Float) -> Unit = viewModel::rotateRuler
   val onToggleZoomWindow: () -> Unit = viewModel::toggleZoomWindow
   val onAdvanceZoomBox: (Float, Float) -> Unit = viewModel::advanceZoomTargetBox
-  val onToggleAudioRecording: () -> Unit = viewModel::toggleAudioRecording
-  val onToggleAudioReplay: () -> Unit = viewModel::toggleAudioReplay
-  val onToggleAudioBar: () -> Unit = viewModel::toggleAudioBar
-  val onAddLaserTrail: (List<Offset>) -> Unit = viewModel::addLaserTrail
-  val onPruneExpiredLaserTrails: () -> Unit = viewModel::pruneExpiredLaserTrails
-  val onAddStroke: (List<Offset>, List<Float>, Boolean) -> Unit = viewModel::addStroke
-  val onTriggerInstantCircleToLasso: (List<Offset>) -> Boolean = viewModel::triggerInstantCircleToLasso
-  val onTryConvertCircleStrokeToLassoAtHold: (Offset) -> Boolean = viewModel::tryConvertDrawnCircleStrokeToLassoAtHold
-  val onEraseAtPoint: (Offset, Boolean) -> Unit = { pt, _ -> viewModel.eraseAtPoints(listOf(pt)) }
-  val onFinishEraserGesture: () -> Unit = {}
+  val onSelectLaserMode: (LaserMode) -> Unit = viewModel::selectLaserMode
+  val onSelectLaserColor: (Color) -> Unit = viewModel::selectLaserColor
+  val onAddStroke: (List<Offset>, List<Float>, Boolean, Float) -> Unit = viewModel::addStroke
+  val onCommitPendingCircleLoop: () -> Unit = viewModel::commitPendingCircleLoopAsHandwriting
+  val onActivatePendingCircleLoop: (Offset) -> Boolean = viewModel::activatePendingCircleLoopToLasso
+  val onEraseAtPoint: (Offset, Boolean, Boolean, Float) -> Unit = { pt, recordUndo, forceTemp, scale ->
+    viewModel.eraseAtPoints(
+      points = listOf(pt),
+      forceTemporaryEraser = forceTemp,
+      zoomScale = scale,
+      recordUndo = recordUndo,
+    )
+  }
+  val onFinishEraserGesture: () -> Unit = viewModel::finishEraserGesture
   val onUndo: () -> Unit = viewModel::undo
   val onRedo: () -> Unit = viewModel::redo
   val onTogglePageBookmark: () -> Unit = viewModel::toggleCurrentPageBookmark
@@ -397,7 +398,6 @@ fun EditorScreen(
   val onCyclePaperTemplate: () -> Unit = viewModel::cyclePaperTemplate
   val onDismissPopover: () -> Unit = viewModel::dismissPopover
   val onTogglePopover: (ActivePopover) -> Unit = viewModel::togglePopover
-  val onClearStatusToast: () -> Unit = viewModel::clearToast
 
   val proColors = LocalProNotesColors.current
   val isWhiteboard = activeDocument?.documentType == DocumentType.WHITEBOARD
@@ -408,12 +408,52 @@ fun EditorScreen(
   val inProgressPoints = remember { mutableStateListOf<Offset>() }
   val inProgressPressures = remember { mutableStateListOf<Float>() }
   var isDrawingSnappedHold by remember { mutableStateOf(false) }
+  var eraserCursorPosition by remember { mutableStateOf<Offset?>(null) }
+  var activeLaserPoint by remember { mutableStateOf<Offset?>(null) }
+  val laserTrailPoints = remember { mutableStateListOf<LaserTrailPoint>() }
+  var laserStrokeCounter by remember { mutableIntStateOf(0) }
+  var laserFadeTick by remember { mutableIntStateOf(0) }
+  val laserTrailDurationMs = 520L
+
+  val circleLassoConversionProgress = remember { Animatable(1f) }
+
+  LaunchedEffect(circleLassoConversionToken, showLassoSelection, primaryTool) {
+    if (circleLassoConversionToken != 0L && showLassoSelection && primaryTool == PrimaryTool.LASSO) {
+      circleLassoConversionProgress.snapTo(0f)
+      circleLassoConversionProgress.animateTo(
+        targetValue = 1f,
+        animationSpec = tween(durationMillis = 340, easing = FastOutSlowInEasing),
+      )
+    } else {
+      circleLassoConversionProgress.snapTo(1f)
+    }
+  }
+
+  // Clear preview stroke, eraser cursor, laser state, and lasso animation on document switch, page change, or tool change
+  LaunchedEffect(activeTabId, activeDocument?.currentPageIndex, primaryTool, activeWritingSubTool) {
+    inProgressPoints.clear()
+    inProgressPressures.clear()
+    isDrawingSnappedHold = false
+    eraserCursorPosition = null
+    activeLaserPoint = null
+    laserTrailPoints.clear()
+  }
+
+  DisposableEffect(Unit) {
+    onDispose {
+      activeLaserPoint = null
+      laserTrailPoints.clear()
+      eraserCursorPosition = null
+      inProgressPoints.clear()
+      inProgressPressures.clear()
+    }
+  }
 
   // Interactive Multi-Touch Pinch-to-Zoom & 2-Finger Pan State
   var canvasScale by remember(activeTabId) { mutableFloatStateOf(1f) }
   var canvasPanOffset by remember(activeTabId) { mutableStateOf(Offset.Zero) }
 
-  // Hardware S Pen side button & tool-type tracker (non-recomposing on move frames)
+  // Hardware stylus side button & tool-type tracker (non-recomposing on move frames)
   val hardwareStylusState = remember {
     object {
       var buttonDown: Boolean = false
@@ -422,26 +462,13 @@ fun EditorScreen(
     }
   }
 
-  // Prune laser trails periodically
-  LaunchedEffect(laserTrails.size) {
-    if (laserTrails.isNotEmpty()) {
-      delay(450L)
-      onPruneExpiredLaserTrails()
-    }
-  }
-
-  // Audio recording timer
-  LaunchedEffect(isAudioRecording) {
-    while (isAudioRecording) {
-      delay(1000L)
-    }
-  }
-
-  // Auto-clear toast message
-  LaunchedEffect(statusToastMessage) {
-    if (statusToastMessage != null) {
-      delay(2200L)
-      onClearStatusToast()
+  // Smoothly fade and prune timestamped laser trail points in real time and after pointer-up
+  LaunchedEffect(activeLaserPoint != null, laserTrailPoints.isNotEmpty()) {
+    while (activeLaserPoint != null || laserTrailPoints.isNotEmpty()) {
+      delay(16L)
+      val nowMs = System.currentTimeMillis()
+      laserTrailPoints.removeAll { pt -> nowMs - pt.timestampMs > laserTrailDurationMs }
+      laserFadeTick++
     }
   }
 
@@ -476,19 +503,11 @@ fun EditorScreen(
           canRedo = canRedo,
           onUndo = onUndo,
           onRedo = onRedo,
-          onSelectPrimaryTool = { tool ->
-            if (tool == PrimaryTool.IMAGE) {
-              onSelectPrimaryTool(tool)
-              onImportImageFromDevice()
-            } else {
-              onSelectPrimaryTool(tool)
-            }
-          },
+          onSelectPrimaryTool = onSelectPrimaryTool,
           onTogglePageSidebar = onTogglePageSidebar,
           onToggleBookmark = onTogglePageBookmark,
           onToggleRuler = onToggleRuler,
           onToggleZoomWindow = onToggleZoomWindow,
-          onToggleAudioBar = onToggleAudioBar,
           onOpenTimeKeeper = { onTogglePopover(ActivePopover.TIME_KEEPER) },
           onOpenToolbarCustomize = { onTogglePopover(ActivePopover.TOOLBAR_CUSTOMIZE) },
           onOpenExportShare = { onTogglePopover(ActivePopover.EXPORT_SHARE) },
@@ -504,8 +523,15 @@ fun EditorScreen(
         )
       }
 
-      // 3. DOCKED CONTEXTUAL SECONDARY TOOL STRIP (Pen styles, thicknesses, color swatches)
-      if (!isReadOnlyMode && primaryTool != PrimaryTool.LASSO) {
+      // 3. DOCKED CONTEXTUAL SECONDARY TOOL STRIP (Pen styles, thicknesses, color swatches, or Laser controls)
+      if (!isReadOnlyMode && primaryTool == PrimaryTool.LASER) {
+        DockedLaserStrip(
+          laserMode = laserMode,
+          laserColor = laserColor,
+          onSelectLaserMode = onSelectLaserMode,
+          onSelectLaserColor = onSelectLaserColor,
+        )
+      } else if (!isReadOnlyMode && primaryTool != PrimaryTool.LASSO) {
         DockedContextualWritingStrip(
           activeWritingSubTool = activeWritingSubTool,
           enabledWritingSubTools = enabledWritingSubTools,
@@ -522,19 +548,6 @@ fun EditorScreen(
           onSelectThicknessIndex = onSelectThicknessIndex,
           onSelectQuickSwatch = onSelectQuickSwatch,
           onOpenColorPicker = { onTogglePopover(ActivePopover.PEN_COLOR) },
-        )
-      }
-
-      // 4. OPTIONAL DOCKED AUDIO RECORDING TIMELINE BAR
-      if (isAudioBarVisible) {
-        AudioRecordingTimelineBar(
-          isRecording = isAudioRecording,
-          isPlayingReplay = isAudioPlayingReplay,
-          recordedSeconds = audioRecordedSeconds,
-          strokeCount = currentPage.strokes.size,
-          onToggleRecord = onToggleAudioRecording,
-          onToggleReplay = onToggleAudioReplay,
-          onCloseAudioBar = onToggleAudioBar,
         )
       }
 
@@ -791,36 +804,41 @@ fun EditorScreen(
                       .testTag(if (isCurrentActivePage) "note_drawing_canvas" else "note_page_canvas_$pageIndex")
                       .pointerInteropFilter { motionEvent ->
                         val action = motionEvent.actionMasked
-                        if (
-                          action == MotionEvent.ACTION_DOWN ||
-                            action == MotionEvent.ACTION_POINTER_DOWN ||
-                            action == MotionEvent.ACTION_MOVE ||
-                            action == MotionEvent.ACTION_HOVER_MOVE
-                        ) {
-                          val buttonState = motionEvent.buttonState
-                          hardwareStylusState.buttonDown =
-                            (buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0 ||
-                              (buttonState and MotionEvent.BUTTON_SECONDARY) != 0
-                          var foundStylus = false
-                          var foundEraser = false
-                          for (i in 0 until motionEvent.pointerCount) {
-                            when (motionEvent.getToolType(i)) {
-                              MotionEvent.TOOL_TYPE_STYLUS -> foundStylus = true
-                              MotionEvent.TOOL_TYPE_ERASER -> {
-                                foundStylus = true
-                                foundEraser = true
+                        val buttonState = motionEvent.buttonState
+                        val hasStylusSideButton =
+                          (buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0 ||
+                            (buttonState and MotionEvent.BUTTON_STYLUS_SECONDARY) != 0
+                        when (action) {
+                          MotionEvent.ACTION_DOWN,
+                          MotionEvent.ACTION_POINTER_DOWN,
+                          MotionEvent.ACTION_MOVE,
+                          MotionEvent.ACTION_HOVER_MOVE,
+                          MotionEvent.ACTION_BUTTON_PRESS -> {
+                            hardwareStylusState.buttonDown = hasStylusSideButton
+                            var foundStylus = false
+                            var foundEraser = false
+                            for (i in 0 until motionEvent.pointerCount) {
+                              when (motionEvent.getToolType(i)) {
+                                MotionEvent.TOOL_TYPE_STYLUS -> foundStylus = true
+                                MotionEvent.TOOL_TYPE_ERASER -> {
+                                  foundStylus = true
+                                  foundEraser = true
+                                }
                               }
                             }
+                            hardwareStylusState.isStylusOrEraser = foundStylus
+                            hardwareStylusState.isEraserTail = foundEraser
                           }
-                          hardwareStylusState.isStylusOrEraser = foundStylus
-                          hardwareStylusState.isEraserTail = foundEraser
-                        } else if (
-                          action == MotionEvent.ACTION_UP ||
-                            action == MotionEvent.ACTION_CANCEL
-                        ) {
-                          hardwareStylusState.buttonDown = false
-                          hardwareStylusState.isStylusOrEraser = false
-                          hardwareStylusState.isEraserTail = false
+                          MotionEvent.ACTION_BUTTON_RELEASE -> {
+                            hardwareStylusState.buttonDown = hasStylusSideButton
+                          }
+                          MotionEvent.ACTION_UP,
+                          MotionEvent.ACTION_CANCEL,
+                          MotionEvent.ACTION_HOVER_EXIT -> {
+                            hardwareStylusState.buttonDown = false
+                            hardwareStylusState.isStylusOrEraser = false
+                            hardwareStylusState.isEraserTail = false
+                          }
                         }
                         false
                       }
@@ -835,10 +853,12 @@ fun EditorScreen(
                         selectedThicknessIndex,
                         eraserMode,
                         eraserRadius,
+                        laserMode,
                         highlighterStraightLine,
                         drawAndHold,
                         holdToErase,
                         circleToLasso,
+                        pendingCircleLoop?.id,
                         isSPenBarrelButtonActive,
                         onlyDrawWithStylus,
                         palmRejectionSensitivity,
@@ -851,6 +871,14 @@ fun EditorScreen(
                         pages.size,
                       ) {
                         if (!isCurrentActivePage) return@pointerInput
+
+                        fun readSafePressure(
+                          change: androidx.compose.ui.input.pointer.PointerInputChange
+                        ): Float {
+                          val p = change.pressure
+                          return if (p.isFinite() && p > 0f) p.coerceIn(0.1f, 1.5f) else 0.5f
+                        }
+
                         awaitEachGesture {
                           var activeDown = awaitFirstDown(requireUnconsumed = false)
                           var isStylusDown =
@@ -874,9 +902,9 @@ fun EditorScreen(
                                 activeDown.position.x > (canvasWidthPx - edgeGuardWidth)
                               }
 
-                          // If a palm/finger touched down first (in Palm Guard, Stylus-Only mode, or Read-Only mode),
-                          // do NOT return early while the finger/palm is still pressed (which would lock out S Pen
-                          // inside awaitAllPointersUp). Instead, handle finger pan/zoom AND watch for an S Pen touch!
+                          // When Stylus Only is enabled, or in Palm Guard / Read-Only mode,
+                          // prevent touch input from drawing while still allowing 2-finger zoom/pan
+                          // or promoting an arriving stylus pointer immediately.
                           if (inPalmZone || isReadOnlyMode || (onlyDrawWithStylus && !isStylusDown)) {
                             var promotedStylusChange: androidx.compose.ui.input.pointer.PointerInputChange? = null
                             do {
@@ -928,7 +956,7 @@ fun EditorScreen(
                             }
                           }
 
-                          // Consume down IMMEDIATELY so HorizontalPager/VerticalPager never steals a stylus stroke
+                          // Consume down IMMEDIATELY so HorizontalPager/VerticalPager never steals a stroke
                           activeDown.consume()
                           val activePointerId = activeDown.id
 
@@ -971,70 +999,206 @@ fun EditorScreen(
                             } while (zEvt.changes.any { it.pressed })
                           }
 
-                          when (primaryTool) {
-                            PrimaryTool.TEXT -> {
-                              onAddTextBoxAt(activeDown.position, "Double-tap to edit note")
+                          // Step 2 of Circle-to-Lasso:
+                          // If a pending closed loop exists and the user presses near its start or end point,
+                          // holding for ~300ms converts the loop into an active lasso selection.
+                          // Pressing outside the endpoint area or dragging away commits the loop as handwriting.
+                          val activePendingLoop = pendingCircleLoop
+                          if (activePendingLoop != null) {
+                            if (
+                              circleToLasso &&
+                                isPointNearPendingLoopEndpoint(
+                                  point = activeDown.position,
+                                  loop = activePendingLoop,
+                                  zoomScale = canvasScale,
+                                )
+                            ) {
+                              val holdStartMs = System.currentTimeMillis()
+                              val holdOrigin = activeDown.position
+                              val maxHoldDrift = 22f / canvasScale.coerceIn(0.25f, 5f)
+                              var convertedToLasso = false
+                              var holdWatcherJob: kotlinx.coroutines.Job? = null
+                              holdWatcherJob =
+                                pagerScope.launch {
+                                  delay(300L)
+                                  if (onActivatePendingCircleLoop(holdOrigin)) {
+                                    convertedToLasso = true
+                                    inProgressPoints.clear()
+                                    inProgressPressures.clear()
+                                  }
+                                }
+                              try {
+                                while (true) {
+                                  val evt = awaitPointerEvent()
+                                  val ch = resolveActiveChange(evt) ?: break
+                                  evt.changes.forEach { it.consume() }
+                                  if (!ch.pressed) {
+                                    if (!convertedToLasso) {
+                                      holdWatcherJob.cancel()
+                                      onCommitPendingCircleLoop()
+                                    }
+                                    return@awaitEachGesture
+                                  }
+                                  if (convertedToLasso) {
+                                    // Keep consuming until stylus lifts after conversion
+                                    continue
+                                  }
+                                  if ((ch.position - holdOrigin).getDistance() > maxHoldDrift) {
+                                    // User started dragging a new stroke instead of holding
+                                    holdWatcherJob.cancel()
+                                    onCommitPendingCircleLoop()
+                                    break
+                                  }
+                                  if (System.currentTimeMillis() - holdStartMs >= 300L && !convertedToLasso) {
+                                    if (onActivatePendingCircleLoop(holdOrigin)) {
+                                      convertedToLasso = true
+                                      inProgressPoints.clear()
+                                      inProgressPressures.clear()
+                                    }
+                                  }
+                                }
+                              } finally {
+                                holdWatcherJob?.cancel()
+                              }
+                              if (convertedToLasso) {
+                                return@awaitEachGesture
+                              }
+                            } else {
+                              onCommitPendingCircleLoop()
                             }
+                          }
 
-                            PrimaryTool.STICKY_NOTE -> {
-                              onAddStickyNoteAt(activeDown.position)
-                            }
+                          // Temporary erasing when an Android stylus side button (PRIMARY or SECONDARY)
+                          // or hardware eraser tail is held, automatically restoring the previous tool on release.
+                          val stylusButtonOrTailErase =
+                            isHardwareEraserTail ||
+                              isSPenBarrelButtonActive ||
+                              hardwareStylusState.buttonDown
 
-                            PrimaryTool.ELEMENTS -> {
-                              onInsertElementStamp(ElementStampType.QUESTION_FLAG)
-                            }
-
-                            PrimaryTool.IMAGE -> {
-                              onImportImageFromDevice()
-                            }
-
-                            PrimaryTool.ERASER -> {
-                              var didRecordEraseUndo = false
-                              onEraseAtPoint(activeDown.position, true)
-                              didRecordEraseUndo = true
+                          if (
+                            stylusButtonOrTailErase &&
+                              primaryTool != PrimaryTool.ERASER &&
+                              primaryTool != PrimaryTool.LASER
+                          ) {
+                            var recordedErase = false
+                            try {
+                              eraserCursorPosition = activeDown.position
+                              onEraseAtPoint(activeDown.position, true, true, canvasScale)
+                              recordedErase = true
                               while (true) {
                                 val event = awaitPointerEvent()
-                                if (!isStylusDown && event.changes.count { it.pressed } >= 2) {
-                                  runTwoFingerZoomLoop()
-                                  break
-                                }
                                 val change = resolveActiveChange(event) ?: break
                                 event.changes.forEach { it.consume() }
                                 if (!change.pressed) break
-                                onEraseAtPoint(change.position, !didRecordEraseUndo)
-                                didRecordEraseUndo = true
+                                val stillErasing =
+                                  isHardwareEraserTail ||
+                                    isSPenBarrelButtonActive ||
+                                    hardwareStylusState.buttonDown ||
+                                    hardwareStylusState.isEraserTail
+                                if (!stillErasing) {
+                                  // Button released while pointer down -> restore writing tool immediately
+                                  eraserCursorPosition = null
+                                  onFinishEraserGesture()
+                                  break
+                                }
+                                eraserCursorPosition = change.position
+                                onEraseAtPoint(change.position, !recordedErase, true, canvasScale)
+                                recordedErase = true
                               }
+                            } finally {
+                              eraserCursorPosition = null
                               onFinishEraserGesture()
+                            }
+                            return@awaitEachGesture
+                          }
+
+                          when (primaryTool) {
+                            PrimaryTool.ERASER -> {
+                              var didRecordEraseUndo = false
+                              try {
+                                eraserCursorPosition = activeDown.position
+                                onEraseAtPoint(activeDown.position, true, false, canvasScale)
+                                didRecordEraseUndo = true
+                                while (true) {
+                                  val event = awaitPointerEvent()
+                                  if (!isStylusDown && event.changes.count { it.pressed } >= 2) {
+                                    eraserCursorPosition = null
+                                    runTwoFingerZoomLoop()
+                                    break
+                                  }
+                                  val change = resolveActiveChange(event) ?: break
+                                  event.changes.forEach { it.consume() }
+                                  if (!change.pressed) break
+                                  eraserCursorPosition = change.position
+                                  onEraseAtPoint(change.position, !didRecordEraseUndo, false, canvasScale)
+                                  didRecordEraseUndo = true
+                                }
+                              } finally {
+                                eraserCursorPosition = null
+                                onFinishEraserGesture()
+                              }
                             }
 
                             PrimaryTool.LASER -> {
+                              val minStep = 1.6f / canvasScale.coerceIn(0.25f, 5f)
+                              val currentStrokeId = ++laserStrokeCounter
                               inProgressPoints.clear()
-                              inProgressPoints.add(activeDown.position)
-                              while (true) {
-                                val event = awaitPointerEvent()
-                                if (!isStylusDown && event.changes.count { it.pressed } >= 2) {
-                                  inProgressPoints.clear()
-                                  runTwoFingerZoomLoop()
-                                  break
+                              inProgressPressures.clear()
+                              val downTimeMs = System.currentTimeMillis()
+                              activeLaserPoint = activeDown.position
+                              var lastTrailPosition = activeDown.position
+                              if (laserMode == LaserMode.FADING_TRAIL) {
+                                laserTrailPoints.add(
+                                  LaserTrailPoint(
+                                    position = activeDown.position,
+                                    timestampMs = downTimeMs,
+                                    strokeId = currentStrokeId,
+                                  )
+                                )
+                              }
+                              try {
+                                while (true) {
+                                  val event = awaitPointerEvent()
+                                  if (!isStylusDown && event.changes.count { it.pressed } >= 2) {
+                                    activeLaserPoint = null
+                                    laserTrailPoints.clear()
+                                    runTwoFingerZoomLoop()
+                                    break
+                                  }
+                                  val change = resolveActiveChange(event) ?: break
+                                  event.changes.forEach { it.consume() }
+                                  if (!change.pressed) break
+                                  val nowMs = System.currentTimeMillis()
+                                  activeLaserPoint = change.position
+                                  if (laserMode == LaserMode.FADING_TRAIL) {
+                                    if ((change.position - lastTrailPosition).getDistance() >= minStep) {
+                                      lastTrailPosition = change.position
+                                      laserTrailPoints.add(
+                                        LaserTrailPoint(
+                                          position = change.position,
+                                          timestampMs = nowMs,
+                                          strokeId = currentStrokeId,
+                                        )
+                                      )
+                                    }
+                                    laserTrailPoints.removeAll { pt ->
+                                      nowMs - pt.timestampMs > laserTrailDurationMs
+                                    }
+                                  }
                                 }
-                                val change = resolveActiveChange(event) ?: break
-                                event.changes.forEach { it.consume() }
-                                if (!change.pressed) break
-                                inProgressPoints.add(change.position)
+                              } finally {
+                                activeLaserPoint = null
                               }
-                              if (inProgressPoints.size >= 2) {
-                                onAddLaserTrail(inProgressPoints.toList())
-                              }
-                              inProgressPoints.clear()
                             }
 
                             PrimaryTool.LASSO -> {
                               val activeShape = shapeState.value
+                              val edgeHitDistance = 28f / canvasScale.coerceIn(0.25f, 5f)
                               val isInsideSelection =
                                 showLassoSelection &&
                                   activeShape != null &&
                                   (activeShape.contains(activeDown.position) ||
-                                    activeShape.distanceToEdge(activeDown.position) < 28f)
+                                    activeShape.distanceToEdge(activeDown.position) < edgeHitDistance)
 
                               if (isInsideSelection) {
                                 var prevPos = activeDown.position
@@ -1063,72 +1227,68 @@ fun EditorScreen(
                                   onCommitLassoChanges()
                                 }
                               } else {
+                                val minLassoStep = 1.8f / canvasScale.coerceIn(0.25f, 5f)
                                 inProgressPoints.clear()
+                                inProgressPressures.clear()
                                 inProgressPoints.add(activeDown.position)
                                 var switchedToZoom = false
-                                while (true) {
-                                  val event = awaitPointerEvent()
-                                  if (!isStylusDown && event.changes.count { it.pressed } >= 2) {
-                                    inProgressPoints.clear()
-                                    switchedToZoom = true
-                                    runTwoFingerZoomLoop()
-                                    break
+                                var wasCancelled = false
+                                try {
+                                  while (true) {
+                                    val event = awaitPointerEvent()
+                                    if (!isStylusDown && event.changes.count { it.pressed } >= 2) {
+                                      inProgressPoints.clear()
+                                      switchedToZoom = true
+                                      runTwoFingerZoomLoop()
+                                      break
+                                    }
+                                    val change = resolveActiveChange(event)
+                                    if (change == null) {
+                                      wasCancelled = true
+                                      break
+                                    }
+                                    event.changes.forEach { it.consume() }
+                                    if (!change.pressed) break
+                                    if ((change.position - inProgressPoints.last()).getDistance() > minLassoStep) {
+                                      inProgressPoints.add(change.position)
+                                    }
                                   }
-                                  val change = resolveActiveChange(event) ?: break
-                                  event.changes.forEach { it.consume() }
-                                  if (!change.pressed) break
-                                  inProgressPoints.add(change.position)
-                                }
 
-                                if (!switchedToZoom) {
-                                  val dragDist =
-                                    (inProgressPoints.last() - activeDown.position).getDistance()
-                                  if (showLassoSelection && (inProgressPoints.size < 5 || dragDist < 18f)) {
-                                    onClearLassoSelection()
-                                  } else if (inProgressPoints.size >= 3) {
-                                    onAddStroke(inProgressPoints.toList(), emptyList(), false)
+                                  if (!switchedToZoom && !wasCancelled && inProgressPoints.isNotEmpty()) {
+                                    val dragDist =
+                                      (inProgressPoints.last() - activeDown.position).getDistance()
+                                    val minTapClearDist = 18f / canvasScale.coerceIn(0.25f, 5f)
+                                    if (showLassoSelection && (inProgressPoints.size < 5 || dragDist < minTapClearDist)) {
+                                      onClearLassoSelection()
+                                    } else if (inProgressPoints.size >= 3) {
+                                      onAddStroke(inProgressPoints.toList(), emptyList(), false, canvasScale)
+                                    } else {
+                                      onClearLassoSelection()
+                                    }
                                   }
+                                } finally {
+                                  inProgressPoints.clear()
+                                  inProgressPressures.clear()
                                 }
-                                inProgressPoints.clear()
                               }
                             }
 
                             PrimaryTool.WRITING_TOOLS,
                             PrimaryTool.SHAPE -> {
-                              val sPenButtonEraseTriggered =
-                                isHardwareEraserTail ||
-                                  isSPenBarrelButtonActive ||
-                                  (holdToErase && hardwareStylusState.buttonDown)
-
-                              if (sPenButtonEraseTriggered) {
-                                var recordedErase = false
-                                onEraseAtPoint(activeDown.position, true)
-                                recordedErase = true
-                                while (true) {
-                                  val event = awaitPointerEvent()
-                                  val change = resolveActiveChange(event) ?: break
-                                  event.changes.forEach { it.consume() }
-                                  if (!change.pressed) break
-                                  onEraseAtPoint(change.position, !recordedErase)
-                                  recordedErase = true
-                                }
-                                onFinishEraserGesture()
-                                return@awaitEachGesture
-                              }
-
                               inProgressPoints.clear()
                               inProgressPressures.clear()
                               isDrawingSnappedHold = false
 
                               val startPoint = activeDown.position
-                              val startPressure = activeDown.pressure.coerceIn(0.15f, 1.5f)
+                              val startPressure = readSafePressure(activeDown)
                               inProgressPoints.add(startPoint)
                               inProgressPressures.add(startPressure)
 
                               var lastMovePoint = startPoint
                               var lastMoveTimeMs = System.currentTimeMillis()
-                              var circleLassoHoldTriggered = false
+                              var holdEraseTriggered = false
                               var switchedToTwoFingerZoom = false
+                              var pointerCancelled = false
 
                               val holdWatcher =
                                 pagerScope.launch {
@@ -1137,42 +1297,12 @@ fun EditorScreen(
                                     val totalDisplacement =
                                       (lastMovePoint - startPoint).getDistance()
                                     val stationaryMs = System.currentTimeMillis() - lastMoveTimeMs
-
-                                    if (
-                                      circleToLasso &&
-                                        !circleLassoHoldTriggered &&
-                                        totalDisplacement < 26f &&
-                                        inProgressPoints.size <= 14 &&
-                                        stationaryMs > 280L
-                                    ) {
-                                      if (onTryConvertCircleStrokeToLassoAtHold(lastMovePoint)) {
-                                        circleLassoHoldTriggered = true
-                                        inProgressPoints.clear()
-                                        inProgressPressures.clear()
-                                        break
-                                      }
-                                    }
-
-                                    if (
-                                      circleToLasso &&
-                                        !circleLassoHoldTriggered &&
-                                        inProgressPoints.size >= 14 &&
-                                        stationaryMs > 380L &&
-                                        isClosedCircleLoop(inProgressPoints)
-                                    ) {
-                                      if (onTriggerInstantCircleToLasso(inProgressPoints.toList())) {
-                                        circleLassoHoldTriggered = true
-                                        inProgressPoints.clear()
-                                        inProgressPressures.clear()
-                                        break
-                                      }
-                                    }
+                                    val holdDispThreshold = 28f / canvasScale.coerceIn(0.25f, 5f)
 
                                     if (
                                       drawAndHold &&
                                         !isDrawingSnappedHold &&
-                                        !circleLassoHoldTriggered &&
-                                        totalDisplacement > 28f &&
+                                        totalDisplacement > holdDispThreshold &&
                                         stationaryMs > 400L
                                     ) {
                                       isDrawingSnappedHold = true
@@ -1181,6 +1311,9 @@ fun EditorScreen(
                                 }
 
                               try {
+                                val minStepDist = 1.8f / canvasScale.coerceIn(0.25f, 5f)
+                                val moveNoiseThreshold = 4.2f / canvasScale.coerceIn(0.25f, 5f)
+
                                 while (true) {
                                   val event = awaitPointerEvent()
                                   // Only switch to pinch-zoom if using fingers (!isStylusDown)
@@ -1197,18 +1330,41 @@ fun EditorScreen(
                                     break
                                   }
 
-                                  val change = resolveActiveChange(event) ?: break
+                                  val change = resolveActiveChange(event)
+                                  if (change == null) {
+                                    pointerCancelled = true
+                                    break
+                                  }
                                   event.changes.forEach { it.consume() }
                                   if (!change.pressed) break
 
-                                  if (circleLassoHoldTriggered) continue
+                                  // Check if stylus side button is currently pressed mid-stroke for temporary erasing
+                                  if (hardwareStylusState.buttonDown || hardwareStylusState.isEraserTail) {
+                                    val firstEraseFrame = !holdEraseTriggered
+                                    holdEraseTriggered = true
+                                    inProgressPoints.clear()
+                                    inProgressPressures.clear()
+                                    eraserCursorPosition = change.position
+                                    onEraseAtPoint(change.position, firstEraseFrame, true, canvasScale)
+                                    continue
+                                  } else if (holdEraseTriggered) {
+                                    // Side button was released mid-stroke -> immediately restore writing tool and flush erase
+                                    holdEraseTriggered = false
+                                    eraserCursorPosition = null
+                                    onFinishEraserGesture()
+                                    inProgressPoints.clear()
+                                    inProgressPressures.clear()
+                                    inProgressPoints.add(change.position)
+                                    inProgressPressures.add(readSafePressure(change))
+                                    continue
+                                  }
 
                                   val rawPos = change.position
-                                  val pressureVal = change.pressure.coerceIn(0.15f, 1.5f)
+                                  val pressureVal = readSafePressure(change)
                                   val stepMove = (rawPos - lastMovePoint).getDistance()
                                   val nowMs = System.currentTimeMillis()
 
-                                  if (stepMove > 4.5f) {
+                                  if (stepMove > moveNoiseThreshold) {
                                     lastMovePoint = rawPos
                                     lastMoveTimeMs = nowMs
                                   }
@@ -1232,30 +1388,71 @@ fun EditorScreen(
                                       else -> rawPos
                                     }
 
-                                  if ((constrainedPos - inProgressPoints.last()).getDistance() > 1.8f) {
+                                  val distFromLast = (constrainedPos - inProgressPoints.last()).getDistance()
+                                  if (distFromLast > minStepDist) {
+                                    // Lightweight jitter smoothing that preserves sharp handwriting corners
+                                    val count = inProgressPoints.size
+                                    if (
+                                      count >= 2 &&
+                                        !rulerState.isVisible &&
+                                        !(isHighlighterSub && highlighterStraightLine)
+                                    ) {
+                                      val prevPrev = inProgressPoints[count - 2]
+                                      val prev = inProgressPoints[count - 1]
+                                      val v1x = prev.x - prevPrev.x
+                                      val v1y = prev.y - prevPrev.y
+                                      val v2x = constrainedPos.x - prev.x
+                                      val v2y = constrainedPos.y - prev.y
+                                      val len1 = hypot(v1x, v1y)
+                                      val len2 = hypot(v2x, v2y)
+                                      if (len1 > 0.5f && len2 > 0.5f) {
+                                        val cosAngle = (v1x * v2x + v1y * v2y) / (len1 * len2)
+                                        // Only smooth when the stroke is not making a sharp corner (cosAngle > 0.35f)
+                                        if (cosAngle > 0.35f) {
+                                          val midX = (prevPrev.x + constrainedPos.x) * 0.5f
+                                          val midY = (prevPrev.y + constrainedPos.y) * 0.5f
+                                          inProgressPoints[count - 1] =
+                                            Offset(
+                                              x = prev.x * 0.74f + midX * 0.26f,
+                                              y = prev.y * 0.74f + midY * 0.26f,
+                                            )
+                                        }
+                                      }
+                                    }
                                     inProgressPoints.add(constrainedPos)
                                     inProgressPressures.add(pressureVal)
                                   }
                                 }
+
+                                if (
+                                  !switchedToTwoFingerZoom &&
+                                    !pointerCancelled &&
+                                    !holdEraseTriggered &&
+                                    inProgressPoints.isNotEmpty()
+                                ) {
+                                  // Support single-tap stylus dots / periods
+                                  if (inProgressPoints.size == 1) {
+                                    val dotOffset = 0.8f / canvasScale.coerceIn(0.25f, 5f)
+                                    inProgressPoints.add(startPoint + Offset(dotOffset, dotOffset))
+                                    inProgressPressures.add(startPressure)
+                                  }
+                                  onAddStroke(
+                                    inProgressPoints.toList(),
+                                    inProgressPressures.toList(),
+                                    isDrawingSnappedHold,
+                                    canvasScale,
+                                  )
+                                }
                               } finally {
                                 holdWatcher.cancel()
-                              }
-
-                              if (!switchedToTwoFingerZoom && !circleLassoHoldTriggered && inProgressPoints.isNotEmpty()) {
-                                // Support single-tap stylus dots / periods
-                                if (inProgressPoints.size == 1) {
-                                  inProgressPoints.add(startPoint + Offset(0.8f, 0.8f))
-                                  inProgressPressures.add(startPressure)
+                                if (holdEraseTriggered) {
+                                  onFinishEraserGesture()
                                 }
-                                onAddStroke(
-                                  inProgressPoints.toList(),
-                                  inProgressPressures.toList(),
-                                  isDrawingSnappedHold,
-                                )
+                                eraserCursorPosition = null
+                                inProgressPoints.clear()
+                                inProgressPressures.clear()
+                                isDrawingSnappedHold = false
                               }
-                              inProgressPoints.clear()
-                              inProgressPressures.clear()
-                              isDrawingSnappedHold = false
                             }
                           }
                         }
@@ -1295,8 +1492,53 @@ fun EditorScreen(
                       )
                     }
 
-                  // Active in-progress stroke
-                  if (isCurrentActivePage && inProgressPoints.size >= 2 && primaryTool != PrimaryTool.LASSO) {
+                  // Subtle temporary preview for Pending Circle-to-Lasso Loop (800ms window)
+                  if (isCurrentActivePage && pendingCircleLoop != null && pendingCircleLoop.points.size >= 3) {
+                    val pendingPts = pendingCircleLoop.points
+                    val pendingPath =
+                      Path().apply {
+                        moveTo(pendingPts.first().x, pendingPts.first().y)
+                        for (i in 1 until pendingPts.size) {
+                          val prev = pendingPts[i - 1]
+                          val curr = pendingPts[i]
+                          quadraticTo(prev.x, prev.y, (prev.x + curr.x) / 2f, (prev.y + curr.y) / 2f)
+                        }
+                      }
+                    drawPath(
+                      path = pendingPath,
+                      color = pendingCircleLoop.color,
+                      style =
+                        Stroke(
+                          width = pendingCircleLoop.strokeWidth,
+                          cap = StrokeCap.Round,
+                          join = StrokeJoin.Round,
+                        ),
+                    )
+                    drawPath(
+                      path = pendingPath,
+                      color = SwitchBlue.copy(alpha = 0.55f),
+                      style =
+                        Stroke(
+                          width = (2.2f / canvasScale.coerceIn(0.25f, 5f)).coerceAtLeast(1f),
+                          cap = StrokeCap.Round,
+                          pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), 0f),
+                        ),
+                    )
+                    val endpointIndicatorRadius = 7f / canvasScale.coerceIn(0.25f, 5f)
+                    drawCircle(
+                      color = SwitchBlue.copy(alpha = 0.35f),
+                      radius = endpointIndicatorRadius,
+                      center = pendingCircleLoop.lastPoint,
+                    )
+                  }
+
+                  // Active in-progress writing/shape stroke (excludes Lasso and Laser)
+                  if (
+                    isCurrentActivePage &&
+                      inProgressPoints.size >= 2 &&
+                      primaryTool != PrimaryTool.LASSO &&
+                      primaryTool != PrimaryTool.LASER
+                  ) {
                     val isShapeOrSnap =
                       primaryTool == PrimaryTool.SHAPE ||
                         (primaryTool == PrimaryTool.WRITING_TOOLS &&
@@ -1320,6 +1562,9 @@ fun EditorScreen(
                     val isHigh =
                       primaryTool == PrimaryTool.WRITING_TOOLS &&
                         activeWritingSubTool == WritingSubTool.HIGHLIGHTER
+                    val isPencil =
+                      primaryTool == PrimaryTool.WRITING_TOOLS &&
+                        activeWritingSubTool == WritingSubTool.PENCIL
                     val isTape =
                       primaryTool == PrimaryTool.WRITING_TOOLS &&
                         activeWritingSubTool == WritingSubTool.TAPE
@@ -1332,7 +1577,8 @@ fun EditorScreen(
                       }
                     val liveColor =
                       when {
-                        isHigh -> selectedColor.copy(alpha = 0.38f)
+                        isHigh -> selectedColor.copy(alpha = 0.36f)
+                        isPencil -> selectedColor.copy(alpha = 0.82f)
                         isTape -> Color(0xFFFFAB40).copy(alpha = 0.85f)
                         else -> selectedColor
                       }
@@ -1340,7 +1586,6 @@ fun EditorScreen(
                     drawPath(
                       path = path,
                       color = liveColor,
-                      blendMode = if (isHigh) BlendMode.Darken else DrawScope.DefaultBlendMode,
                       style =
                         Stroke(
                           width = liveW,
@@ -1364,78 +1609,186 @@ fun EditorScreen(
                       color = SwitchBlue,
                       style =
                         Stroke(
-                          width = 3.5f,
+                          width = (3f / canvasScale.coerceIn(0.25f, 5f)).coerceAtLeast(1.2f),
                           cap = StrokeCap.Round,
-                          pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f), 0f),
+                          pathEffect = PathEffect.dashPathEffect(floatArrayOf(12f, 9f), 0f),
                         ),
                     )
                   }
 
-                  // Completed Lasso Selection Outline + Bounding Box
+                  // Completed Lasso Selection Outline + Progressive Circle-to-Lasso Conversion Animation
                   if (isCurrentActivePage && showLassoSelection && primaryTool == PrimaryTool.LASSO && lassoLoopPoints.size >= 3) {
-                    val loopPath =
-                      Path().apply {
-                        moveTo(lassoLoopPoints.first().x, lassoLoopPoints.first().y)
-                        for (i in 1 until lassoLoopPoints.size) {
-                          lineTo(lassoLoopPoints[i].x, lassoLoopPoints[i].y)
-                        }
-                        close()
-                      }
-                    drawPath(
-                      path = loopPath,
-                      color = SwitchBlue.copy(alpha = 0.08f),
-                    )
-                    drawPath(
-                      path = loopPath,
-                      color = SwitchBlue,
-                      style =
-                        Stroke(
-                          width = 3.5f,
-                          cap = StrokeCap.Round,
-                          pathEffect = PathEffect.dashPathEffect(floatArrayOf(14f, 10f), 0f),
-                        ),
-                    )
-                    if (lassoBounds != null) {
-                      val pad = 8f
-                      drawRect(
-                        color = SwitchBlue.copy(alpha = if (isLassoResizeMode) 0.85f else 0.4f),
-                        topLeft = Offset(lassoBounds[0] - pad, lassoBounds[1] - pad),
-                        size =
-                          androidx.compose.ui.geometry.Size(
-                            width = (lassoBounds[2] - lassoBounds[0] + pad * 2f).coerceAtLeast(24f),
-                            height = (lassoBounds[3] - lassoBounds[1] + pad * 2f).coerceAtLeast(24f),
-                          ),
-                        style =
-                          Stroke(
-                            width = if (isLassoResizeMode) 2.5f else 1.5f,
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), 0f),
-                          ),
-                      )
-                    }
-                  }
+                    val animProgress = circleLassoConversionProgress.value.coerceIn(0f, 1f)
+                    val safeZoom = canvasScale.coerceIn(0.25f, 5f)
+                    if (animProgress < 0.999f) {
+                      val splitIdx =
+                        (animProgress * (lassoLoopPoints.size - 1))
+                          .roundToInt()
+                          .coerceIn(1, lassoLoopPoints.size - 1)
 
-                  // Laser Pointer Trails
-                  if (isCurrentActivePage) {
-                    laserTrails.forEach { trail ->
-                      if (trail.points.size >= 2) {
-                        val trailPath =
+                      // 1. Remaining unconverted portion of the hand-drawn ink loop (from splitIdx to end)
+                      if (splitIdx < lassoLoopPoints.size - 1) {
+                        val remainingInkPath =
                           Path().apply {
-                            moveTo(trail.points.first().x, trail.points.first().y)
-                            for (i in 1 until trail.points.size) {
-                              lineTo(trail.points[i].x, trail.points[i].y)
+                            moveTo(lassoLoopPoints[splitIdx].x, lassoLoopPoints[splitIdx].y)
+                            for (i in (splitIdx + 1) until lassoLoopPoints.size) {
+                              lineTo(lassoLoopPoints[i].x, lassoLoopPoints[i].y)
                             }
                           }
                         drawPath(
-                          path = trailPath,
-                          color = Color(0x55FF1744),
-                          style = Stroke(width = 16f, cap = StrokeCap.Round, join = StrokeJoin.Round),
-                        )
-                        drawPath(
-                          path = trailPath,
-                          color = Color(0xFFFF5252),
-                          style = Stroke(width = 5f, cap = StrokeCap.Round, join = StrokeJoin.Round),
+                          path = remainingInkPath,
+                          color = convertingCircleLassoColor.copy(alpha = (1f - animProgress * 0.45f).coerceIn(0.2f, 1f)),
+                          style =
+                            Stroke(
+                              width = convertingCircleLassoWidth,
+                              cap = StrokeCap.Round,
+                              join = StrokeJoin.Round,
+                            ),
                         )
                       }
+
+                      // 2. Traveling dotted/dashed lasso outline from held endpoint (0) to splitIdx
+                      val convertedLassoPath =
+                        Path().apply {
+                          moveTo(lassoLoopPoints.first().x, lassoLoopPoints.first().y)
+                          for (i in 1..splitIdx) {
+                            lineTo(lassoLoopPoints[i].x, lassoLoopPoints[i].y)
+                          }
+                        }
+                      drawPath(
+                        path = convertedLassoPath,
+                        color = SwitchBlue,
+                        style =
+                          Stroke(
+                            width = (2.6f / safeZoom).coerceAtLeast(1.1f),
+                            cap = StrokeCap.Round,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), 0f),
+                          ),
+                      )
+
+                      // Subtle traveling wavefront dot at the conversion head
+                      val headPt = lassoLoopPoints[splitIdx]
+                      drawCircle(
+                        color = SwitchBlue,
+                        radius = (4.5f / safeZoom).coerceAtLeast(2f),
+                        center = headPt,
+                      )
+                    } else {
+                      val loopPath =
+                        Path().apply {
+                          moveTo(lassoLoopPoints.first().x, lassoLoopPoints.first().y)
+                          for (i in 1 until lassoLoopPoints.size) {
+                            lineTo(lassoLoopPoints[i].x, lassoLoopPoints[i].y)
+                          }
+                          close()
+                        }
+                      drawPath(
+                        path = loopPath,
+                        color = SwitchBlue.copy(alpha = 0.05f),
+                      )
+                      drawPath(
+                        path = loopPath,
+                        color = SwitchBlue.copy(alpha = 0.75f),
+                        style =
+                          Stroke(
+                            width = (2.2f / safeZoom).coerceAtLeast(1f),
+                            cap = StrokeCap.Round,
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), 0f),
+                          ),
+                      )
+                      if (lassoBounds != null) {
+                        val pad = 8f
+                        drawRect(
+                          color = SwitchBlue.copy(alpha = if (isLassoResizeMode) 0.85f else 0.45f),
+                          topLeft = Offset(lassoBounds[0] - pad, lassoBounds[1] - pad),
+                          size =
+                            androidx.compose.ui.geometry.Size(
+                              width = (lassoBounds[2] - lassoBounds[0] + pad * 2f).coerceAtLeast(24f),
+                              height = (lassoBounds[3] - lassoBounds[1] + pad * 2f).coerceAtLeast(24f),
+                            ),
+                          style =
+                            Stroke(
+                              width = (if (isLassoResizeMode) 2.2f else 1.4f) / safeZoom,
+                              pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f),
+                            ),
+                        )
+                      }
+                    }
+                  }
+
+                  // Temporary Eraser Cursor while erasing
+                  if (isCurrentActivePage && eraserCursorPosition != null) {
+                    val cursorCenter = eraserCursorPosition!!
+                    val scaledEraserRadius =
+                      (eraserRadius / canvasScale.coerceIn(0.25f, 5f)).coerceAtLeast(4f)
+                    drawCircle(
+                      color = Color(0x24FF5252),
+                      radius = scaledEraserRadius,
+                      center = cursorCenter,
+                    )
+                    drawCircle(
+                      color = Color(0xCCFF5252),
+                      radius = scaledEraserRadius,
+                      center = cursorCenter,
+                      style =
+                        Stroke(
+                          width = (1.8f / canvasScale.coerceIn(0.25f, 5f)).coerceAtLeast(1f),
+                        ),
+                    )
+                  }
+
+                  // Temporary Presentation Laser Pointer (Bright Current Point + Stationary Fading Trail)
+                  if (isCurrentActivePage) {
+                    // Read laserFadeTick so Canvas invalidates smoothly during trail fade-out
+                    val currentTick = laserFadeTick
+                    val nowMs = System.currentTimeMillis()
+                    val invScale = 1f / canvasScale.coerceIn(0.25f, 5f)
+
+                    // 1) Stationary per-point timestamped trail segments (oldest points fade out in place)
+                    if (laserTrailPoints.size >= 2 && currentTick >= 0) {
+                      for (i in 1 until laserTrailPoints.size) {
+                        val p0 = laserTrailPoints[i - 1]
+                        val p1 = laserTrailPoints[i]
+                        if (p0.strokeId != p1.strokeId) continue
+                        val ageMs = (nowMs - p1.timestampMs).coerceAtLeast(0L)
+                        val alphaFactor =
+                          (1f - (ageMs.toFloat() / laserTrailDurationMs.toFloat())).coerceIn(0f, 1f)
+                        if (alphaFactor > 0.02f) {
+                          drawLine(
+                            color = laserColor.copy(alpha = 0.34f * alphaFactor),
+                            start = p0.position,
+                            end = p1.position,
+                            strokeWidth = (6f + 8f * alphaFactor) * invScale,
+                            cap = StrokeCap.Round,
+                          )
+                          drawLine(
+                            color = laserColor.copy(alpha = 0.94f * alphaFactor),
+                            start = p0.position,
+                            end = p1.position,
+                            strokeWidth = (2.2f + 2.6f * alphaFactor) * invScale,
+                            cap = StrokeCap.Round,
+                          )
+                        }
+                      }
+                    }
+
+                    // 2) Responsive bright laser point at latest stylus position while pointer is down
+                    activeLaserPoint?.let { laserPt ->
+                      drawCircle(
+                        color = laserColor.copy(alpha = 0.35f),
+                        radius = 13f * invScale,
+                        center = laserPt,
+                      )
+                      drawCircle(
+                        color = laserColor,
+                        radius = 6.5f * invScale,
+                        center = laserPt,
+                      )
+                      drawCircle(
+                        color = Color.White,
+                        radius = 3f * invScale,
+                        center = laserPt,
+                      )
                     }
 
                     // Zoom Window Target Box Indicator
@@ -1780,7 +2133,6 @@ fun EditorScreen(
                         onResizeToggleClick = onScaleSelection,
                         onDuplicateClick = onDuplicateSelection,
                         onDeleteClick = onDeleteLassoSelection,
-                        onConvertAiTextClick = { onTogglePopover(ActivePopover.AI_HANDWRITING_ASSIST) },
                         onOpenLassoFiltersClick = { onTogglePopover(ActivePopover.LASSO_SETTINGS) },
                         onDismissLassoClick = onToggleLassoSelection,
                       )
@@ -2033,6 +2385,8 @@ fun EditorScreen(
                 ActivePopover.PEN_SETTINGS -> {
                   PenSettingsPopover(
                     selectedPenStyle = penStyle,
+                    isPencil = activeWritingSubTool == WritingSubTool.PENCIL,
+                    selectedColor = selectedColor,
                     strokePattern = strokePattern,
                     strokeStabilization = strokeStabilization,
                     drawAndHold = drawAndHold,
@@ -2040,14 +2394,15 @@ fun EditorScreen(
                     scribbleToErase = scribbleToErase,
                     circleToLasso = circleToLasso,
                     strokeWidth = thicknessPresets.getOrElse(selectedThicknessIndex) { 6.5f },
+                    selectedThicknessIndex = selectedThicknessIndex,
                     onSelectPenStyle = onSelectPenStyle,
                     onSelectStrokePattern = onSelectStrokePattern,
+                    onSelectThicknessIndex = onSelectThicknessIndex,
                     onStabilizationChange = onStabilizationChange,
                     onToggleDrawAndHold = onToggleDrawAndHold,
                     onToggleHoldToErase = onToggleHoldToErase,
                     onToggleScribbleToErase = onToggleScribbleToErase,
                     onToggleCircleToLasso = onToggleCircleToLasso,
-                    onOpenAiAssist = { onTogglePopover(ActivePopover.AI_HANDWRITING_ASSIST) },
                     onDismiss = onDismissPopover,
                   )
                 }
@@ -2109,10 +2464,6 @@ fun EditorScreen(
                   )
                 }
 
-                ActivePopover.ELEMENTS_PICKER -> {
-                  ElementsPickerPopover(onInsertElement = onInsertElementStamp)
-                }
-
                 ActivePopover.TIME_KEEPER -> {
                   TimeKeeperPopover(onDismiss = onDismissPopover)
                 }
@@ -2128,16 +2479,6 @@ fun EditorScreen(
                     onToggleWritingSubToolEnabled = onToggleWritingSubToolEnabled,
                     onResetDefaults = onResetToolbarDefaults,
                     onResetWritingDefaults = onResetWritingToolsDefaults,
-                    onDismiss = onDismissPopover,
-                  )
-                }
-
-                ActivePopover.AI_HANDWRITING_ASSIST -> {
-                  AiHandwritingAssistPopover(
-                    strokeCount = currentPage.strokes.size,
-                    onInsertConvertedTextBox = { text ->
-                      onAddTextBoxAt(Offset(100f, 120f), text)
-                    },
                     onDismiss = onDismissPopover,
                   )
                 }
@@ -2209,34 +2550,6 @@ fun EditorScreen(
               }
             }
           }
-
-          // Subtle Status Toast Banner
-          androidx.compose.animation.AnimatedVisibility(
-            visible = statusToastMessage != null,
-            enter = fadeIn(),
-            exit = fadeOut(),
-            modifier =
-              Modifier
-                .align(Alignment.BottomCenter)
-                .padding(bottom = 14.dp),
-          ) {
-            Box(
-              modifier =
-                Modifier
-                  .shadow(8.dp, RoundedCornerShape(20.dp))
-                  .clip(RoundedCornerShape(20.dp))
-                  .background(Color(0xEE1F2229))
-                  .border(1.dp, Color(0xFF363A45), RoundedCornerShape(20.dp))
-                  .padding(horizontal = 16.dp, vertical = 8.dp),
-            ) {
-              Text(
-                text = statusToastMessage.orEmpty(),
-                color = Color.White,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Medium,
-              )
-            }
-          }
         }
       }
 
@@ -2246,7 +2559,7 @@ fun EditorScreen(
           strokeWidth = thicknessPresets.getOrElse(selectedThicknessIndex) { 6.5f },
           targetBoxOffset = zoomTargetBoxOffset,
           onCommitZoomStroke = { scaledPts ->
-            onAddStroke(scaledPts, emptyList(), false)
+            onAddStroke(scaledPts, emptyList(), false, canvasScale)
           },
           onAdvanceZoomBox = onAdvanceZoomBox,
           onCloseZoomWindow = onToggleZoomWindow,
@@ -2278,7 +2591,6 @@ private fun DockedMainToolbar(
   onToggleBookmark: () -> Unit,
   onToggleRuler: () -> Unit,
   onToggleZoomWindow: () -> Unit,
-  onToggleAudioBar: () -> Unit,
   onOpenTimeKeeper: () -> Unit,
   onOpenToolbarCustomize: () -> Unit,
   onOpenExportShare: () -> Unit,
@@ -2393,7 +2705,7 @@ private fun DockedMainToolbar(
       }
     }
 
-    // Center Cluster: Primary Editing Tools + Audio Recording
+    // Center Cluster: Focused Core Note-Taking Tools (Writing Tools, Eraser, Lasso, Shapes, Laser)
     Row(
       modifier =
         Modifier
@@ -2404,7 +2716,7 @@ private fun DockedMainToolbar(
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Row(
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
         PrimaryTool.entries
@@ -2439,40 +2751,6 @@ private fun DockedMainToolbar(
               }
             }
           }
-
-        Box(
-          modifier =
-            Modifier
-              .padding(horizontal = 4.dp)
-              .width(1.dp)
-              .height(22.dp)
-              .background(ToolbarIconLight.copy(alpha = 0.25f)),
-        )
-
-        Row(
-          modifier =
-            Modifier
-              .height(36.dp)
-              .clip(RoundedCornerShape(8.dp))
-              .clickable(onClick = onToggleAudioBar)
-              .padding(horizontal = 6.dp)
-              .testTag("toolbar_audio_record_button"),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-          Icon(
-            imageVector = Icons.Outlined.MicNone,
-            contentDescription = "Record Audio",
-            tint = ToolbarIconLight,
-            modifier = Modifier.size(20.dp),
-          )
-          Icon(
-            imageVector = Icons.Outlined.GraphicEq,
-            contentDescription = null,
-            tint = ToolbarIconLight,
-            modifier = Modifier.size(15.dp),
-          )
-        }
       }
     }
 
@@ -2917,6 +3195,87 @@ private fun DockedContextualWritingStrip(
             modifier = Modifier.size(20.dp),
           )
         }
+      }
+    }
+  }
+}
+
+@Composable
+private fun DockedLaserStrip(
+  laserMode: LaserMode,
+  laserColor: Color,
+  onSelectLaserMode: (LaserMode) -> Unit,
+  onSelectLaserColor: (Color) -> Unit,
+) {
+  val laserPalette =
+    remember {
+      listOf(
+        Color(0xFFFF2D55),
+        Color(0xFFFF9500),
+        Color(0xFF30D158),
+        Color(0xFF0A84FF),
+      )
+    }
+
+  Box(
+    modifier =
+      Modifier
+        .fillMaxWidth()
+        .height(44.dp)
+        .background(SubToolbarPillBg)
+        .border(0.5.dp, SubToolbarBorder)
+        .padding(horizontal = 12.dp)
+        .testTag("floating_laser_subtoolbar"),
+    contentAlignment = Alignment.Center,
+  ) {
+    Row(
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      LaserMode.entries.forEach { mode ->
+        val isSelected = laserMode == mode
+        Box(
+          modifier =
+            Modifier
+              .height(30.dp)
+              .clip(RoundedCornerShape(8.dp))
+              .background(if (isSelected) SwitchBlue else PopoverInnerBg)
+              .clickable { onSelectLaserMode(mode) }
+              .padding(horizontal = 12.dp),
+          contentAlignment = Alignment.Center,
+        ) {
+          Text(
+            text = mode.label,
+            color = Color.White,
+            fontSize = 11.5.sp,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+          )
+        }
+      }
+
+      Box(
+        modifier =
+          Modifier
+            .width(1.dp)
+            .height(20.dp)
+            .background(SubToolbarBorder),
+      )
+
+      laserPalette.forEach { swatch ->
+        val isSelected = laserColor == swatch
+        Box(
+          modifier =
+            Modifier
+              .size(26.dp)
+              .clip(CircleShape)
+              .background(swatch)
+              .border(
+                width = if (isSelected) 2.dp else 1.dp,
+                color = if (isSelected) Color.White else Color.White.copy(alpha = 0.25f),
+                shape = CircleShape,
+              )
+              .clickable { onSelectLaserColor(swatch) },
+        )
       }
     }
   }
@@ -3595,14 +3954,16 @@ private fun DrawScope.drawRichStroke(
     drawPath(path = path, color = stroke.color.copy(alpha = 0.18f))
   }
 
+  val isPencil = stroke.isPencil && !stroke.isHighlighter && !stroke.isShape
   val avgPressure =
-    if (stroke.pressures.isNotEmpty()) stroke.pressures.average().toFloat() else 0.65f
+    if (stroke.pressures.isNotEmpty()) stroke.pressures.average().toFloat() else 0.5f
   val dynamicWidth =
     when {
       stroke.isHighlighter || stroke.isShape -> stroke.strokeWidth
+      isPencil -> stroke.strokeWidth * (0.85f + avgPressure * 0.30f)
       stroke.penStyle == PenStyle.FOUNTAIN -> stroke.strokeWidth * (0.75f + avgPressure * 0.55f)
       stroke.penStyle == PenStyle.BRUSH -> stroke.strokeWidth * (0.65f + avgPressure * 0.95f)
-      else -> stroke.strokeWidth
+      else -> stroke.strokeWidth * (0.88f + avgPressure * 0.24f)
     }
 
   // Subtle selection glow around strokes currently enclosed by the Lasso tool
@@ -3619,10 +3980,51 @@ private fun DrawScope.drawRichStroke(
     )
   }
 
+  if (stroke.isHighlighter) {
+    // Render each highlighter stroke as a single unified translucent path so overlapping segments
+    // within a stroke remain evenly translucent and overlapping strokes do not turn fully opaque.
+    drawPath(
+      path = path,
+      color = stroke.color.copy(alpha = 0.36f),
+      style =
+        Stroke(
+          width = dynamicWidth,
+          cap = StrokeCap.Round,
+          join = StrokeJoin.Round,
+        ),
+    )
+    return
+  }
+
+  if (isPencil) {
+    // Lightweight natural pencil appearance without per-point bitmap allocation
+    drawPath(
+      path = path,
+      color = stroke.color.copy(alpha = 0.72f),
+      style =
+        Stroke(
+          width = dynamicWidth,
+          cap = StrokeCap.Round,
+          join = StrokeJoin.Round,
+          pathEffect = dashEffect,
+        ),
+    )
+    drawPath(
+      path = path,
+      color = stroke.color.copy(alpha = 0.34f),
+      style =
+        Stroke(
+          width = (dynamicWidth * 0.52f).coerceAtLeast(1f),
+          cap = StrokeCap.Round,
+          join = StrokeJoin.Round,
+        ),
+    )
+    return
+  }
+
   // Variable-width pressure-modulated rendering when per-point stylus pressures are present
   val useVariablePressure =
-    !stroke.isHighlighter &&
-      !stroke.isShape &&
+    !stroke.isShape &&
       stroke.strokePattern == StrokePattern.SOLID &&
       stroke.pressures.size == stroke.points.size &&
       (stroke.penStyle == PenStyle.FOUNTAIN || stroke.penStyle == PenStyle.BRUSH)
@@ -3631,7 +4033,7 @@ private fun DrawScope.drawRichStroke(
     for (i in 1 until stroke.points.size) {
       val p0 = stroke.points[i - 1]
       val p1 = stroke.points[i]
-      val pr = ((stroke.pressures[i - 1] + stroke.pressures[i]) * 0.5f).coerceIn(0.15f, 1.5f)
+      val pr = ((stroke.pressures[i - 1] + stroke.pressures[i]) * 0.5f).coerceIn(0.1f, 1.5f)
       val segWidth =
         when (stroke.penStyle) {
           PenStyle.FOUNTAIN -> stroke.strokeWidth * (0.55f + pr * 0.75f)
@@ -3650,7 +4052,6 @@ private fun DrawScope.drawRichStroke(
     drawPath(
       path = path,
       color = stroke.color,
-      blendMode = if (stroke.isHighlighter) BlendMode.Darken else DrawScope.DefaultBlendMode,
       style =
         Stroke(
           width = dynamicWidth,

@@ -74,7 +74,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.model.ElementStampType
 import com.example.model.EraserMode
 import com.example.model.LassoFilterSettings
 import com.example.model.PenStyle
@@ -106,14 +105,17 @@ fun PenSettingsPopover(
   onToggleHoldToErase: (Boolean) -> Unit,
   onToggleScribbleToErase: (Boolean) -> Unit,
   onToggleCircleToLasso: (Boolean) -> Unit,
-  onOpenAiAssist: () -> Unit,
   onDismiss: () -> Unit,
   modifier: Modifier = Modifier,
+  isPencil: Boolean = false,
+  selectedColor: Color = Color.White,
+  selectedThicknessIndex: Int = 1,
+  onSelectThicknessIndex: (Int) -> Unit = {},
 ) {
   Column(
     modifier =
       modifier
-        .width(308.dp)
+        .width(288.dp)
         .shadow(18.dp, RoundedCornerShape(16.dp))
         .clip(RoundedCornerShape(16.dp))
         .background(PopoverBg)
@@ -127,26 +129,26 @@ fun PenSettingsPopover(
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Text(
-        text = selectedPenStyle.title,
+        text = if (isPencil) "Pencil" else selectedPenStyle.title,
         color = TextPrimaryWhite,
         fontSize = 15.sp,
         fontWeight = FontWeight.SemiBold,
       )
       Text(
-        text = selectedPenStyle.subtitle,
+        text = if (isPencil) "Graphite" else selectedPenStyle.subtitle,
         color = TextSecondaryGray,
-        fontSize = 10.sp,
+        fontSize = 11.sp,
       )
     }
 
     Spacer(modifier = Modifier.height(10.dp))
 
-    // Live S-Curve Sinusoidal Stroke Preview Box (1:1 from Screenshot 3)
+    // Live Stroke Preview Box
     Box(
       modifier =
         Modifier
           .fillMaxWidth()
-          .height(78.dp)
+          .height(72.dp)
           .clip(RoundedCornerShape(10.dp))
           .background(PopoverInnerBg),
       contentAlignment = Alignment.Center,
@@ -155,10 +157,14 @@ fun PenSettingsPopover(
         val w = size.width
         val h = size.height
         val previewStroke =
-          when (selectedPenStyle) {
-            PenStyle.FOUNTAIN -> strokeWidth * 1.15f
-            PenStyle.BALL -> strokeWidth * 1.25f
-            PenStyle.BRUSH -> strokeWidth * 1.65f
+          if (isPencil) {
+            strokeWidth * 1.05f
+          } else {
+            when (selectedPenStyle) {
+              PenStyle.FOUNTAIN -> strokeWidth * 1.15f
+              PenStyle.BALL -> strokeWidth * 1.25f
+              PenStyle.BRUSH -> strokeWidth * 1.55f
+            }
           }
         val path =
           Path().apply {
@@ -167,17 +173,21 @@ fun PenSettingsPopover(
             cubicTo(w * 0.66f, -h * 0.08f, w * 0.84f, -h * 0.05f, w * 0.94f, h * 0.55f)
           }
         val dashEffect =
-          when (strokePattern) {
-            StrokePattern.SOLID -> null
-            StrokePattern.DASHED -> PathEffect.dashPathEffect(floatArrayOf(22f, 14f), 0f)
-            StrokePattern.DOTTED -> PathEffect.dashPathEffect(floatArrayOf(6f, 14f), 0f)
+          if (isPencil) {
+            null
+          } else {
+            when (strokePattern) {
+              StrokePattern.SOLID -> null
+              StrokePattern.DASHED -> PathEffect.dashPathEffect(floatArrayOf(22f, 14f), 0f)
+              StrokePattern.DOTTED -> PathEffect.dashPathEffect(floatArrayOf(6f, 14f), 0f)
+            }
           }
         drawPath(
           path = path,
-          color = Color.White,
+          color = if (isPencil) selectedColor.copy(alpha = 0.78f) else selectedColor,
           style =
             Stroke(
-              width = previewStroke.coerceIn(4f, 18f),
+              width = previewStroke.coerceIn(3f, 18f),
               cap = StrokeCap.Round,
               join = StrokeJoin.Round,
               pathEffect = dashEffect,
@@ -186,207 +196,109 @@ fun PenSettingsPopover(
       }
     }
 
-    Spacer(modifier = Modifier.height(10.dp))
+    Spacer(modifier = Modifier.height(12.dp))
 
-    // 3 Pen Style Selector Cards: Fountain Pen | Ball Pen | Brush Pen
+    // Thickness selector
+    val thicknessLabels = listOf("Fine", "Medium", "Bold")
     Row(
       modifier = Modifier.fillMaxWidth(),
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      PenStyle.entries.forEach { style ->
-        val isSelected = style == selectedPenStyle
-        Column(
+      thicknessLabels.forEachIndexed { idx, label ->
+        val isSelected = selectedThicknessIndex == idx
+        Box(
           modifier =
             Modifier
               .weight(1f)
-              .height(56.dp)
-              .clip(RoundedCornerShape(10.dp))
-              .background(if (isSelected) PopoverCardSelected else Color.Transparent)
-              .clickable { onSelectPenStyle(style) }
-              .padding(vertical = 6.dp)
-              .testTag("pen_style_${style.name.lowercase()}"),
-          horizontalAlignment = Alignment.CenterHorizontally,
-          verticalArrangement = Arrangement.Center,
-        ) {
-          PenStyleNibIcon(
-            style = style,
-            isSelected = isSelected,
-            modifier = Modifier.size(20.dp),
-          )
-          Spacer(modifier = Modifier.height(4.dp))
-          Text(
-            text = style.title,
-            color = if (isSelected) TextPrimaryWhite else TextSecondaryGray,
-            fontSize = 11.sp,
-            fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
-          )
-        }
-      }
-    }
-
-    Spacer(modifier = Modifier.height(8.dp))
-
-    // Stroke Styles: Solid | Dashed | Dotted
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-      StrokePattern.entries.forEach { pattern ->
-        val isSelected = pattern == strokePattern
-        Row(
-          modifier =
-            Modifier
-              .weight(1f)
-              .height(28.dp)
+              .height(32.dp)
               .clip(RoundedCornerShape(8.dp))
-              .background(if (isSelected) PopoverCardSelected else PopoverInnerBg)
-              .clickable { onSelectStrokePattern(pattern) }
-              .padding(horizontal = 8.dp),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.Center,
+              .background(if (isSelected) SwitchBlue else PopoverCardSelected)
+              .clickable { onSelectThicknessIndex(idx) },
+          contentAlignment = Alignment.Center,
         ) {
           Text(
-            text = pattern.label,
-            color = if (isSelected) TextPrimaryWhite else TextSecondaryGray,
-            fontSize = 11.sp,
-            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+            text = label,
+            color = Color.White,
+            fontSize = 11.5.sp,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
           )
         }
       }
     }
 
-    Spacer(modifier = Modifier.height(10.dp))
+    if (!isPencil) {
+      Spacer(modifier = Modifier.height(10.dp))
 
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.SpaceBetween,
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Text(
-        text = "STROKE STABILIZATION",
-        color = TextSecondaryGray,
-        fontSize = 10.sp,
-        fontWeight = FontWeight.Medium,
-        letterSpacing = 0.5.sp,
-      )
-      Text(
-        text = "${strokeStabilization.toInt()}%",
-        color = TextSecondaryGray,
-        fontSize = 10.sp,
-        fontWeight = FontWeight.Medium,
-      )
-    }
+      // Pen Style Selector Cards: Fountain Pen | Ball Pen | Brush Pen
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        PenStyle.entries.forEach { style ->
+          val isSelected = style == selectedPenStyle
+          Column(
+            modifier =
+              Modifier
+                .weight(1f)
+                .height(54.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(if (isSelected) PopoverCardSelected else Color.Transparent)
+                .clickable { onSelectPenStyle(style) }
+                .padding(vertical = 6.dp)
+                .testTag("pen_style_${style.name.lowercase()}"),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+          ) {
+            PenStyleNibIcon(
+              style = style,
+              isSelected = isSelected,
+              modifier = Modifier.size(20.dp),
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+              text = style.title,
+              color = if (isSelected) TextPrimaryWhite else TextSecondaryGray,
+              fontSize = 11.sp,
+              fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+            )
+          }
+        }
+      }
 
-    Slider(
-      value = strokeStabilization,
-      onValueChange = onStabilizationChange,
-      valueRange = 0f..100f,
-      colors =
-        SliderDefaults.colors(
-          thumbColor = Color.White,
-          activeTrackColor = SwitchBlue,
-          inactiveTrackColor = Color(0xFF38383C),
-        ),
-      modifier = Modifier.fillMaxWidth().height(28.dp).testTag("stabilization_slider"),
-    )
+      Spacer(modifier = Modifier.height(8.dp))
 
-    Spacer(modifier = Modifier.height(4.dp))
-
-    Text(
-      text = "SETTINGS & PEN GESTURES",
-      color = TextSecondaryGray,
-      fontSize = 10.sp,
-      fontWeight = FontWeight.Medium,
-      letterSpacing = 0.5.sp,
-    )
-
-    Spacer(modifier = Modifier.height(2.dp))
-
-    PopoverToggleRow(
-      label = "Draw and Hold (Auto-Snap Shape)",
-      checked = drawAndHold,
-      onCheckedChange = onToggleDrawAndHold,
-      testTag = "draw_and_hold_switch",
-    )
-
-    HorizontalDivider(color = PopoverDivider, thickness = 0.5.dp)
-
-    PopoverToggleRow(
-      label = "Circle to Lasso (Circle → Lift → Hold)",
-      checked = circleToLasso,
-      onCheckedChange = onToggleCircleToLasso,
-      testTag = "circle_to_lasso_switch",
-    )
-
-    HorizontalDivider(color = PopoverDivider, thickness = 0.5.dp)
-
-    PopoverToggleRow(
-      label = "Scribble to Erase",
-      checked = scribbleToErase,
-      onCheckedChange = onToggleScribbleToErase,
-      testTag = "scribble_to_erase_switch",
-    )
-
-    HorizontalDivider(color = PopoverDivider, thickness = 0.5.dp)
-
-    PopoverToggleRow(
-      label = "Hold in Place / S Pen Button Erase",
-      checked = holdToErase,
-      onCheckedChange = onToggleHoldToErase,
-      testTag = "hold_to_erase_switch",
-    )
-
-    HorizontalDivider(color = PopoverDivider, thickness = 0.5.dp)
-
-    Row(
-      modifier =
-        Modifier
-          .fillMaxWidth()
-          .height(34.dp)
-          .clickable(onClick = onOpenAiAssist),
-      horizontalArrangement = Arrangement.SpaceBetween,
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Text(
-        text = "Pen Gestures & AI Assist",
-        color = TextPrimaryWhite,
-        fontSize = 13.sp,
-      )
-      Icon(
-        imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
-        contentDescription = null,
-        tint = TextSecondaryGray,
-        modifier = Modifier.size(18.dp),
-      )
-    }
-
-    HorizontalDivider(color = PopoverDivider, thickness = 0.5.dp)
-
-    Row(
-      modifier =
-        Modifier
-          .fillMaxWidth()
-          .height(32.dp)
-          .clickable(onClick = onDismiss)
-          .testTag("disconnect_stylus_row"),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Text(
-        text = "Disconnect Stylus",
-        color = DangerRed,
-        fontSize = 13.sp,
-        fontWeight = FontWeight.Medium,
-      )
+      // Stroke Styles: Solid | Dashed | Dotted
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        StrokePattern.entries.forEach { pattern ->
+          val isSelected = pattern == strokePattern
+          Row(
+            modifier =
+              Modifier
+                .weight(1f)
+                .height(28.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(if (isSelected) PopoverCardSelected else PopoverInnerBg)
+                .clickable { onSelectStrokePattern(pattern) }
+                .padding(horizontal = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center,
+          ) {
+            Text(
+              text = pattern.label,
+              color = if (isSelected) TextPrimaryWhite else TextSecondaryGray,
+              fontSize = 11.sp,
+              fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+            )
+          }
+        }
+      }
     }
   }
 }
 
-/**
- * Dedicated Goodnotes 6 Highlighter Settings Popover:
- * - Shows live preview of highlighter ink layering underneath dark text using Multiply/Darken blend
- * - Draw in Straight Line toggle
- * - Draw and Hold straight-line snap toggle
- */
 @Composable
 fun HighlighterSettingsPopover(
   selectedColor: Color,
@@ -401,7 +313,7 @@ fun HighlighterSettingsPopover(
   Column(
     modifier =
       modifier
-        .width(288.dp)
+        .width(276.dp)
         .shadow(18.dp, RoundedCornerShape(16.dp))
         .clip(RoundedCornerShape(16.dp))
         .background(PopoverBg)
@@ -415,20 +327,15 @@ fun HighlighterSettingsPopover(
       fontSize = 15.sp,
       fontWeight = FontWeight.SemiBold,
     )
-    Text(
-      text = "Renders behind ink using Multiply blend so dark text never washes out.",
-      color = TextSecondaryGray,
-      fontSize = 10.5.sp,
-    )
 
     Spacer(modifier = Modifier.height(10.dp))
 
-    // Live Preview on white paper showing crisp dark text with highlighter layered behind it
+    // Live Preview on white paper showing dark text with translucent highlighter layered behind it
     Box(
       modifier =
         Modifier
           .fillMaxWidth()
-          .height(58.dp)
+          .height(56.dp)
           .clip(RoundedCornerShape(10.dp))
           .background(Color.White),
       contentAlignment = Alignment.Center,
@@ -443,25 +350,24 @@ fun HighlighterSettingsPopover(
             else -> 38f
           }
         drawLine(
-          color = selectedColor.copy(alpha = 0.42f),
+          color = selectedColor.copy(alpha = 0.36f),
           start = Offset(w * 0.08f, h * 0.52f),
           end = Offset(w * 0.92f, h * 0.52f),
           strokeWidth = barWidth,
           cap = StrokeCap.Round,
-          blendMode = BlendMode.Darken,
         )
       }
       Text(
-        text = "APC = Total Consumption / Income",
+        text = "Highlighted Note Text",
         color = Color(0xFF141518),
-        fontSize = 12.5.sp,
+        fontSize = 13.sp,
         fontWeight = FontWeight.Bold,
       )
     }
 
     Spacer(modifier = Modifier.height(10.dp))
 
-    // Chisel Thickness Selector
+    // Thickness Selector
     val thicknessLabels = listOf("Fine", "Medium", "Broad")
     Row(
       modifier = Modifier.fillMaxWidth(),
@@ -493,19 +399,10 @@ fun HighlighterSettingsPopover(
     HorizontalDivider(color = PopoverDivider, thickness = 0.5.dp)
 
     PopoverToggleRow(
-      label = "Draw in Straight Line",
+      label = "Straight Line",
       checked = highlighterStraightLine,
       onCheckedChange = { onToggleStraightLine() },
       testTag = "highlighter_straight_line_switch",
-    )
-
-    HorizontalDivider(color = PopoverDivider, thickness = 0.5.dp)
-
-    PopoverToggleRow(
-      label = "Draw & Hold to Snap Line",
-      checked = drawAndHold,
-      onCheckedChange = onToggleDrawAndHold,
-      testTag = "highlighter_draw_hold_switch",
     )
   }
 }
@@ -1069,7 +966,7 @@ fun EraserSettingsPopover(
   Column(
     modifier =
       modifier
-        .width(276.dp)
+        .width(268.dp)
         .shadow(16.dp, RoundedCornerShape(16.dp))
         .clip(RoundedCornerShape(16.dp))
         .background(PopoverBg)
@@ -1078,9 +975,9 @@ fun EraserSettingsPopover(
         .testTag("eraser_settings_popover"),
   ) {
     Text(
-      text = "Eraser Tool (Erases Ink, Lines & Shapes)",
+      text = "Eraser",
       color = TextPrimaryWhite,
-      fontSize = 13.5.sp,
+      fontSize = 14.5.sp,
       fontWeight = FontWeight.SemiBold,
     )
     Spacer(modifier = Modifier.height(10.dp))
@@ -1148,15 +1045,6 @@ fun EraserSettingsPopover(
           inactiveTrackColor = Color(0xFF38383C),
         ),
       modifier = Modifier.fillMaxWidth().height(26.dp),
-    )
-
-    HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = PopoverDivider)
-
-    PopoverToggleRow(
-      label = "Auto-Deselect",
-      checked = autoDeselect,
-      onCheckedChange = onToggleAutoDeselect,
-      testTag = "eraser_auto_deselect_switch",
     )
 
     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = PopoverDivider)
@@ -1354,18 +1242,6 @@ fun LassoSettingsPopover(
       onCheckedChange = { onUpdateFilters(filters.copy(includeImages = it)) },
       testTag = "lasso_filter_images",
     )
-    PopoverToggleRow(
-      label = "Text Boxes",
-      checked = filters.includeTextBoxes,
-      onCheckedChange = { onUpdateFilters(filters.copy(includeTextBoxes = it)) },
-      testTag = "lasso_filter_text",
-    )
-    PopoverToggleRow(
-      label = "Comments",
-      checked = filters.includeComments,
-      onCheckedChange = { onUpdateFilters(filters.copy(includeComments = it)) },
-      testTag = "lasso_filter_comments",
-    )
 
     HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = PopoverDivider)
 
@@ -1429,69 +1305,6 @@ fun LassoSettingsPopover(
 }
 
 @Composable
-fun ElementsPickerPopover(
-  onInsertElement: (ElementStampType) -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  Column(
-    modifier =
-      modifier
-        .width(280.dp)
-        .shadow(16.dp, RoundedCornerShape(16.dp))
-        .clip(RoundedCornerShape(16.dp))
-        .background(PopoverBg)
-        .border(1.dp, PopoverDivider, RoundedCornerShape(16.dp))
-        .padding(16.dp)
-        .testTag("elements_picker_popover"),
-  ) {
-    Text(
-      text = "Elements",
-      color = TextPrimaryWhite,
-      fontSize = 14.sp,
-      fontWeight = FontWeight.SemiBold,
-    )
-    Text(
-      text = "Tap any element to insert onto page",
-      color = TextSecondaryGray,
-      fontSize = 11.sp,
-    )
-    Spacer(modifier = Modifier.height(10.dp))
-
-    val rows = ElementStampType.entries.chunked(2)
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-      rows.forEach { pair ->
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-          pair.forEach { stamp ->
-            Box(
-              modifier =
-                Modifier
-                  .weight(1f)
-                  .height(42.dp)
-                  .clip(RoundedCornerShape(10.dp))
-                  .background(stamp.tint.copy(alpha = 0.18f))
-                  .border(1.dp, stamp.tint.copy(alpha = 0.65f), RoundedCornerShape(10.dp))
-                  .clickable { onInsertElement(stamp) }
-                  .padding(horizontal = 8.dp),
-              contentAlignment = Alignment.Center,
-            ) {
-              Text(
-                text = stamp.badgeText,
-                color = stamp.tint,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-              )
-            }
-          }
-        }
-      }
-    }
-  }
-}
-
-@Composable
 fun LassoFloatingMenuPill(
   isResizeModeActive: Boolean,
   hasClipboardContent: Boolean,
@@ -1505,7 +1318,6 @@ fun LassoFloatingMenuPill(
   onResizeToggleClick: () -> Unit,
   onDuplicateClick: () -> Unit,
   onDeleteClick: () -> Unit,
-  onConvertAiTextClick: () -> Unit,
   onOpenLassoFiltersClick: () -> Unit,
   onDismissLassoClick: () -> Unit,
   modifier: Modifier = Modifier,
@@ -1693,59 +1505,7 @@ fun LassoFloatingMenuPill(
         )
       }
 
-      // 7. Quick Scale Down (-) and Up (+)
-      Row(
-        modifier =
-          Modifier
-            .height(30.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(Color(0xFF25272E))
-            .border(1.dp, Color(0xFF343741), RoundedCornerShape(8.dp))
-            .padding(horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
-      ) {
-        Box(
-          modifier =
-            Modifier
-              .size(24.dp)
-              .clip(RoundedCornerShape(6.dp))
-              .clickable { onScaleStepClick(false) }
-              .testTag("lasso_scale_down_button"),
-          contentAlignment = Alignment.Center,
-        ) {
-          Icon(
-            imageVector = Icons.Default.Remove,
-            contentDescription = "Scale Down",
-            tint = TextPrimaryWhite,
-            modifier = Modifier.size(14.dp),
-          )
-        }
-        Text(
-          text = "Size",
-          color = TextSecondaryGray,
-          fontSize = 10.sp,
-          fontWeight = FontWeight.Medium,
-        )
-        Box(
-          modifier =
-            Modifier
-              .size(24.dp)
-              .clip(RoundedCornerShape(6.dp))
-              .clickable { onScaleStepClick(true) }
-              .testTag("lasso_scale_up_button"),
-          contentAlignment = Alignment.Center,
-        ) {
-          Icon(
-            imageVector = Icons.Default.Add,
-            contentDescription = "Scale Up",
-            tint = TextPrimaryWhite,
-            modifier = Modifier.size(14.dp),
-          )
-        }
-      }
-
-      // 8. Duplicate
+      // 7. Duplicate
       Box(
         modifier =
           Modifier
@@ -1763,26 +1523,7 @@ fun LassoFloatingMenuPill(
         )
       }
 
-      // 9. AI Handwriting Assist
-      Box(
-        modifier =
-          Modifier
-            .height(32.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onConvertAiTextClick)
-            .padding(horizontal = 6.dp),
-        contentAlignment = Alignment.Center,
-      ) {
-        Text(
-          text = "AI",
-          color = TextPrimaryWhite,
-          fontSize = 13.5.sp,
-          fontFamily = FontFamily.Serif,
-          fontWeight = FontWeight.Bold,
-        )
-      }
-
-      // 10. Delete
+      // 8. Delete
       Box(
         modifier =
           Modifier
@@ -1801,7 +1542,7 @@ fun LassoFloatingMenuPill(
         )
       }
 
-      // 11. Dismiss
+      // 9. Dismiss
       Box(
         modifier =
           Modifier

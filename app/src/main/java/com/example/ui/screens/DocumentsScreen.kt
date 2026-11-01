@@ -61,9 +61,12 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -158,19 +161,42 @@ fun DocumentsScreen(
   var renameInitialTitle by remember { mutableStateOf("") }
   var moveTarget by remember { mutableStateOf<Pair<Boolean, String>?>(null) } // (isFolder, id)
 
+  val folderById = remember(folders) { folders.associateBy { it.id } }
+
   val visibleFolders =
-    remember(folders, currentFolderId, selectedSection, searchQuery, sortOption) {
+    remember(folders, notebooks, currentFolderId, selectedSection, searchQuery, sortOption) {
+      val trimmedQuery = searchQuery.trim()
       val base =
         when (selectedSection) {
           DocumentsSidebarSection.DOCUMENTS ->
-            folders.filter { !it.isTrashed && it.parentFolderId == currentFolderId }
+            if (trimmedQuery.isEmpty()) {
+              folders.filter { !it.isTrashed && it.parentFolderId == currentFolderId }
+            } else {
+              // When searching, search across all active folders (or descendants if inside a folder)
+              folders.filter { folder ->
+                !folder.isTrashed &&
+                  (currentFolderId == null || folder.parentFolderId == currentFolderId || folder.id == currentFolderId)
+              }
+            }
           DocumentsSidebarSection.TRASH ->
             folders.filter { it.isTrashed }
           else -> emptyList()
         }
       val searched =
-        if (searchQuery.isBlank()) base
-        else base.filter { it.name.contains(searchQuery.trim(), ignoreCase = true) }
+        if (trimmedQuery.isEmpty()) {
+          base
+        } else {
+          base.filter { folder ->
+            val folderMatches = folder.name.contains(trimmedQuery, ignoreCase = true)
+            val hasMatchingChildNotebook =
+              notebooks.any { nb ->
+                !nb.isTrashed &&
+                  nb.folderId == folder.id &&
+                  nb.title.contains(trimmedQuery, ignoreCase = true)
+              }
+            folderMatches || hasMatchingChildNotebook
+          }
+        }
       when (sortOption) {
         DocumentSortOption.RECENT -> searched.sortedByDescending { it.updatedAtEpochMs }
         DocumentSortOption.NAME_ASC -> searched.sortedBy { it.name.lowercase() }
@@ -179,13 +205,18 @@ fun DocumentsScreen(
     }
 
   val filteredNotebooks =
-    remember(notebooks, currentFolderId, selectedSection, searchQuery, sortOption) {
+    remember(notebooks, folders, currentFolderId, selectedSection, searchQuery, sortOption) {
+      val trimmedQuery = searchQuery.trim()
       val bySection =
         when (selectedSection) {
           DocumentsSidebarSection.DOCUMENTS ->
             notebooks.filter {
               !it.isTrashed &&
-                (if (searchQuery.isNotBlank()) true else it.folderId == currentFolderId)
+                (if (trimmedQuery.isNotEmpty()) {
+                  currentFolderId == null || it.folderId == currentFolderId
+                } else {
+                  it.folderId == currentFolderId
+                })
             }
           DocumentsSidebarSection.FAVORITES ->
             notebooks.filter { !it.isTrashed && it.isFavorite }
@@ -197,15 +228,20 @@ fun DocumentsScreen(
             notebooks.filter { it.isTrashed }
         }
       val byQuery =
-        if (searchQuery.isBlank()) {
+        if (trimmedQuery.isEmpty()) {
           bySection
         } else {
-          val q = searchQuery.trim()
           bySection.filter { doc ->
-            doc.title.contains(q, ignoreCase = true) ||
+            val parentFolder = doc.folderId?.let { folderById[it] }
+            val parentFolderMatches =
+              parentFolder != null &&
+                !parentFolder.isTrashed &&
+                parentFolder.name.contains(trimmedQuery, ignoreCase = true)
+            doc.title.contains(trimmedQuery, ignoreCase = true) ||
+              parentFolderMatches ||
               doc.pages.any { page ->
-                page.textBoxes.any { tb -> tb.text.contains(q, ignoreCase = true) } ||
-                  page.stickyNotes.any { st -> st.text.contains(q, ignoreCase = true) }
+                page.textBoxes.any { tb -> tb.text.contains(trimmedQuery, ignoreCase = true) } ||
+                  page.stickyNotes.any { st -> st.text.contains(trimmedQuery, ignoreCase = true) }
               }
           }
         }
@@ -609,8 +645,58 @@ fun DocumentsScreen(
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Main Library View (Grid or List)
-        if (libraryViewMode == LibraryViewMode.GRID) {
+        // Main Library View (Grid, List, or Empty Search State)
+        if (searchQuery.isNotBlank() && visibleFolders.isEmpty() && filteredNotebooks.isEmpty()) {
+          Box(
+            modifier =
+              Modifier
+                .fillMaxSize()
+                .padding(24.dp)
+                .testTag("search_empty_state"),
+            contentAlignment = Alignment.Center,
+          ) {
+            Column(
+              horizontalAlignment = Alignment.CenterHorizontally,
+              verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+              Icon(
+                imageVector = Icons.Default.Search,
+                contentDescription = null,
+                tint = colors.textSecondary.copy(alpha = 0.55f),
+                modifier = Modifier.size(48.dp),
+              )
+              Text(
+                text = "No matching notes or folders",
+                color = colors.textPrimary,
+                fontSize = 17.sp,
+                fontWeight = FontWeight.SemiBold,
+              )
+              Text(
+                text = "Nothing matched \"${searchQuery.trim()}\". Try another title or folder name.",
+                color = colors.textSecondary,
+                fontSize = 13.5.sp,
+              )
+              Spacer(modifier = Modifier.height(4.dp))
+              Box(
+                modifier =
+                  Modifier
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(colors.surfaceVariant)
+                    .border(1.dp, colors.border, RoundedCornerShape(10.dp))
+                    .clickable { onSearchQueryChange("") }
+                    .padding(horizontal = 16.dp, vertical = 9.dp)
+                    .testTag("empty_state_clear_search_button"),
+              ) {
+                Text(
+                  text = "Clear search",
+                  color = colors.textPrimary,
+                  fontSize = 13.sp,
+                  fontWeight = FontWeight.Medium,
+                )
+              }
+            }
+          }
+        } else if (libraryViewMode == LibraryViewMode.GRID) {
           LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = if (isCompact) 142.dp else 160.dp),
             contentPadding = PaddingValues(bottom = 32.dp),
@@ -618,8 +704,8 @@ fun DocumentsScreen(
             verticalArrangement = Arrangement.spacedBy(22.dp),
             modifier = Modifier.fillMaxSize(),
           ) {
-            // 1. "+ New..." Dashed Creation Card in Documents Root or Folder
-            if (selectedSection == DocumentsSidebarSection.DOCUMENTS) {
+            // 1. "+ New..." Dashed Creation Card in Documents Root or Folder (hidden while actively filtering)
+            if (selectedSection == DocumentsSidebarSection.DOCUMENTS && searchQuery.isBlank()) {
               item(key = "new_notebook_card") {
                 Box {
                   NewNotebookDashedCard(
@@ -631,12 +717,25 @@ fun DocumentsScreen(
 
             // 2. Folder Cards
             items(visibleFolders, key = { "folder_${it.id}" }) { folder ->
+              val matchingNotebooksInFolder =
+                if (searchQuery.isBlank()) {
+                  emptyList()
+                } else {
+                  val q = searchQuery.trim()
+                  notebooks.filter {
+                    !it.isTrashed &&
+                      it.folderId == folder.id &&
+                      (it.title.contains(q, ignoreCase = true) ||
+                        folder.name.contains(q, ignoreCase = true))
+                  }
+                }
               val childCount =
                 folders.count { !it.isTrashed && it.parentFolderId == folder.id } +
                   notebooks.count { !it.isTrashed && it.folderId == folder.id }
               FolderGridCard(
                 folder = folder,
                 itemCount = childCount,
+                matchingNotebookTitles = matchingNotebooksInFolder.map { it.title },
                 onOpenFolder = {
                   if (!folder.isTrashed) {
                     onNavigateToFolder(folder.id)
@@ -657,8 +756,11 @@ fun DocumentsScreen(
 
             // 3. Notebook & Whiteboard Cards
             items(filteredNotebooks, key = { it.id }) { doc ->
+              val parentFolderName =
+                doc.folderId?.let { fid -> folderById[fid]?.takeIf { !it.isTrashed }?.name }
               NotebookGridCard(
                 document = doc,
+                parentFolderName = if (searchQuery.isNotBlank() || currentFolderId == null) parentFolderName else null,
                 onClick = { onOpenNotebook(doc.id) },
                 onRename = {
                   renameTarget = false to doc.id
@@ -703,8 +805,11 @@ fun DocumentsScreen(
             }
 
             items(filteredNotebooks, key = { "list_doc_${it.id}" }) { doc ->
+              val parentFolderName =
+                doc.folderId?.let { fid -> folderById[fid]?.takeIf { !it.isTrashed }?.name }
               NotebookListRow(
                 document = doc,
+                parentFolderName = parentFolderName,
                 onClick = { onOpenNotebook(doc.id) },
                 onRename = {
                   renameTarget = false to doc.id
@@ -995,6 +1100,7 @@ private fun NewNotebookDashedCard(
 private fun FolderGridCard(
   folder: FolderItem,
   itemCount: Int,
+  matchingNotebookTitles: List<String> = emptyList(),
   onOpenFolder: () -> Unit,
   onRenameFolder: () -> Unit,
   onMoveFolder: () -> Unit,
@@ -1014,50 +1120,38 @@ private fun FolderGridCard(
         .clickable(onClick = onOpenFolder)
         .testTag("folder_card_${folder.id}"),
   ) {
+    // Main visual element: One large folder icon tinted with the chosen folder color
     Box(
       modifier =
         Modifier
           .width(142.dp)
-          .height(186.dp)
-          .clip(RoundedCornerShape(14.dp))
-          .background(colors.surfaceVariant)
-          .border(1.dp, colors.border, RoundedCornerShape(14.dp))
-          .padding(12.dp),
+          .height(186.dp),
+      contentAlignment = Alignment.Center,
     ) {
       Icon(
         imageVector = Icons.Default.Folder,
         contentDescription = folder.name,
         tint = folderColor,
-        modifier = Modifier.size(78.dp).align(Alignment.Center),
+        modifier = Modifier.size(128.dp),
       )
 
-      // Item count badge at bottom-left
+      // Context menu button at top-end
       Box(
         modifier =
           Modifier
-            .align(Alignment.BottomStart)
-            .clip(RoundedCornerShape(6.dp))
-            .background(colors.surface)
-            .padding(horizontal = 6.dp, vertical = 2.dp),
+            .align(Alignment.TopEnd)
+            .padding(top = 8.dp, end = 6.dp),
       ) {
-        Text(
-          text = "$itemCount item${if (itemCount == 1) "" else "s"}",
-          color = colors.textSecondary,
-          fontSize = 10.sp,
-          fontWeight = FontWeight.SemiBold,
-        )
-      }
-
-      // Context menu button
-      Box(modifier = Modifier.align(Alignment.TopEnd)) {
         Icon(
           imageVector = Icons.Default.MoreVert,
           contentDescription = "Folder Options",
           tint = colors.textSecondary,
           modifier =
             Modifier
-              .size(20.dp)
+              .size(22.dp)
+              .clip(CircleShape)
               .clickable { showMenu = true }
+              .padding(2.dp)
               .testTag("folder_menu_${folder.id}"),
         )
         DropdownMenu(
@@ -1143,10 +1237,18 @@ private fun FolderGridCard(
       maxLines = 1,
       overflow = TextOverflow.Ellipsis,
     )
+    val subtitleText =
+      if (matchingNotebookTitles.isNotEmpty()) {
+        matchingNotebookTitles.joinToString(", ")
+      } else {
+        "$itemCount item${if (itemCount == 1) "" else "s"}"
+      }
     Text(
-      text = "Folder",
-      color = colors.textSecondary,
+      text = subtitleText,
+      color = if (matchingNotebookTitles.isNotEmpty()) colors.accentBlue else colors.textSecondary,
       fontSize = 11.sp,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
     )
   }
 }
@@ -1154,6 +1256,7 @@ private fun FolderGridCard(
 @Composable
 private fun NotebookGridCard(
   document: NotebookDocument,
+  parentFolderName: String? = null,
   onClick: () -> Unit,
   onRename: () -> Unit,
   onMoveToFolder: () -> Unit,
@@ -1403,12 +1506,15 @@ private fun NotebookGridCard(
 
     Spacer(modifier = Modifier.height(2.dp))
 
+    val baseMeta =
+      if (document.documentType == DocumentType.WHITEBOARD) "Whiteboard • ${document.dateLabel}"
+      else "${document.pages.size}p • ${document.dateLabel}"
     Text(
-      text =
-        if (document.documentType == DocumentType.WHITEBOARD) "Whiteboard • ${document.dateLabel}"
-        else "${document.pages.size}p • ${document.dateLabel}",
+      text = if (!parentFolderName.isNullOrBlank()) "$parentFolderName • $baseMeta" else baseMeta,
       color = colors.textSecondary,
       fontSize = 11.sp,
+      maxLines = 1,
+      overflow = TextOverflow.Ellipsis,
     )
   }
 }
@@ -1504,6 +1610,7 @@ private fun FolderListRow(
 @Composable
 private fun NotebookListRow(
   document: NotebookDocument,
+  parentFolderName: String? = null,
   onClick: () -> Unit,
   onRename: () -> Unit,
   onMoveToFolder: () -> Unit,
@@ -1550,10 +1657,11 @@ private fun NotebookListRow(
           fontSize = 14.sp,
           fontWeight = FontWeight.SemiBold,
         )
+        val folderPrefix = if (!parentFolderName.isNullOrBlank()) "$parentFolderName • " else ""
         Text(
           text =
-            if (document.isLockedVault) "Encrypted Vault Document • ${document.dateLabel}"
-            else "${document.pages.size} pages • ${document.pageSizePreset.label} • ${document.dateLabel}",
+            if (document.isLockedVault) "${folderPrefix}Encrypted Vault Document • ${document.dateLabel}"
+            else "$folderPrefix${document.pages.size} pages • ${document.pageSizePreset.label} • ${document.dateLabel}",
           color = colors.textSecondary,
           fontSize = 11.5.sp,
         )
@@ -1667,6 +1775,20 @@ private fun CreateFolderModalDialog(
       0xFF66BB6AL,
     )
   var selectedColorIdx by remember { mutableIntStateOf(0) }
+  var useCustomColor by remember { mutableStateOf(false) }
+  var customHue by remember { mutableFloatStateOf(215f) }
+  var customSaturation by remember { mutableFloatStateOf(0.72f) }
+  var customValue by remember { mutableFloatStateOf(0.95f) }
+
+  val customColorArgb =
+    remember(customHue, customSaturation, customValue) {
+      val rgbInt =
+        android.graphics.Color.HSVToColor(floatArrayOf(customHue, customSaturation, customValue))
+      rgbInt.toLong() and 0xFFFFFFFFL
+    }
+
+  val resolvedColorArgb =
+    if (useCustomColor) customColorArgb else folderColorOptions[selectedColorIdx]
 
   Box(
     modifier =
@@ -1679,8 +1801,8 @@ private fun CreateFolderModalDialog(
     Column(
       modifier =
         Modifier
-          .widthIn(max = 360.dp)
-          .fillMaxWidth(0.9f)
+          .widthIn(max = 380.dp)
+          .fillMaxWidth(0.92f)
           .clip(RoundedCornerShape(16.dp))
           .background(colors.popoverBg)
           .border(1.dp, colors.border, RoundedCornerShape(16.dp))
@@ -1688,12 +1810,24 @@ private fun CreateFolderModalDialog(
           .padding(20.dp)
           .testTag("create_folder_dialog"),
     ) {
-      Text(
-        text = "New Folder",
-        color = colors.textPrimary,
-        fontSize = 17.sp,
-        fontWeight = FontWeight.Bold,
-      )
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+      ) {
+        Text(
+          text = "New Folder",
+          color = colors.textPrimary,
+          fontSize = 17.sp,
+          fontWeight = FontWeight.Bold,
+        )
+        Icon(
+          imageVector = Icons.Default.Folder,
+          contentDescription = null,
+          tint = Color(resolvedColorArgb),
+          modifier = Modifier.size(34.dp),
+        )
+      }
       Spacer(modifier = Modifier.height(12.dp))
       OutlinedTextField(
         value = folderName,
@@ -1710,7 +1844,7 @@ private fun CreateFolderModalDialog(
         modifier = Modifier.fillMaxWidth().testTag("folder_name_input"),
       )
 
-      Spacer(modifier = Modifier.height(12.dp))
+      Spacer(modifier = Modifier.height(14.dp))
       Text(
         text = "FOLDER COLOR",
         color = colors.textSecondary,
@@ -1718,9 +1852,12 @@ private fun CreateFolderModalDialog(
         fontWeight = FontWeight.SemiBold,
       )
       Spacer(modifier = Modifier.height(8.dp))
-      Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+      ) {
         folderColorOptions.forEachIndexed { idx, argb ->
-          val isSel = selectedColorIdx == idx
+          val isSel = !useCustomColor && selectedColorIdx == idx
           Box(
             modifier =
               Modifier
@@ -1732,7 +1869,84 @@ private fun CreateFolderModalDialog(
                   color = if (isSel) Color.White else Color.Transparent,
                   shape = CircleShape,
                 )
-                .clickable { selectedColorIdx = idx },
+                .clickable {
+                  useCustomColor = false
+                  selectedColorIdx = idx
+                }
+                .testTag("folder_color_preset_$idx"),
+          )
+        }
+
+        // Custom color picker toggle pill
+        Box(
+          modifier =
+            Modifier
+              .height(28.dp)
+              .clip(RoundedCornerShape(14.dp))
+              .background(if (useCustomColor) Color(customColorArgb) else colors.surfaceVariant)
+              .border(
+                width = if (useCustomColor) 2.dp else 1.dp,
+                color = if (useCustomColor) Color.White else colors.border,
+                shape = RoundedCornerShape(14.dp),
+              )
+              .clickable { useCustomColor = !useCustomColor }
+              .padding(horizontal = 10.dp)
+              .testTag("folder_custom_color_toggle"),
+          contentAlignment = Alignment.Center,
+        ) {
+          Text(
+            text = "Custom",
+            color = if (useCustomColor) Color.White else colors.textSecondary,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+          )
+        }
+      }
+
+      if (useCustomColor) {
+        Spacer(modifier = Modifier.height(12.dp))
+        Column(
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .clip(RoundedCornerShape(10.dp))
+              .background(colors.surfaceVariant)
+              .padding(horizontal = 12.dp, vertical = 10.dp),
+        ) {
+          Text(
+            text = "Hue",
+            color = colors.textSecondary,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+          )
+          Slider(
+            value = customHue,
+            onValueChange = { customHue = it },
+            valueRange = 0f..360f,
+            colors =
+              SliderDefaults.colors(
+                thumbColor = Color(customColorArgb),
+                activeTrackColor = Color(customColorArgb),
+              ),
+            modifier = Modifier.height(28.dp).testTag("folder_custom_hue_slider"),
+          )
+          Spacer(modifier = Modifier.height(4.dp))
+          Text(
+            text = "Saturation",
+            color = colors.textSecondary,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+          )
+          Slider(
+            value = customSaturation,
+            onValueChange = { customSaturation = it },
+            valueRange = 0.2f..1f,
+            colors =
+              SliderDefaults.colors(
+                thumbColor = Color(customColorArgb),
+                activeTrackColor = Color(customColorArgb),
+              ),
+            modifier = Modifier.height(28.dp).testTag("folder_custom_saturation_slider"),
           )
         }
       }
@@ -1760,7 +1974,7 @@ private fun CreateFolderModalDialog(
               .clickable {
                 onConfirm(
                   folderName.trim().ifEmpty { "Untitled Folder" },
-                  folderColorOptions[selectedColorIdx],
+                  resolvedColorArgb,
                 )
               }
               .padding(horizontal = 16.dp, vertical = 8.dp)

@@ -364,101 +364,7 @@ fun ZoomWindowPanel(
   }
 }
 
-/**
- * Audio Recording & Synchronized Note Replay Bar.
- */
-@Composable
-fun AudioRecordingTimelineBar(
-  isRecording: Boolean,
-  isPlayingReplay: Boolean,
-  recordedSeconds: Int,
-  strokeCount: Int,
-  onToggleRecord: () -> Unit,
-  onToggleReplay: () -> Unit,
-  onCloseAudioBar: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  Row(
-    modifier =
-      modifier
-        .fillMaxWidth()
-        .height(38.dp)
-        .background(Color(0xFF141E33))
-        .padding(horizontal = 14.dp)
-        .testTag("audio_recording_bar"),
-    horizontalArrangement = Arrangement.SpaceBetween,
-    verticalAlignment = Alignment.CenterVertically,
-  ) {
-    Row(
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      Box(
-        modifier =
-          Modifier
-            .size(26.dp)
-            .clip(CircleShape)
-            .background(if (isRecording) DangerRed else Color(0xFF28354E))
-            .clickable(onClick = onToggleRecord),
-        contentAlignment = Alignment.Center,
-      ) {
-        Icon(
-          imageVector = if (isRecording) Icons.Default.Pause else Icons.Default.FiberManualRecord,
-          contentDescription = "Record Audio",
-          tint = Color.White,
-          modifier = Modifier.size(14.dp),
-        )
-      }
 
-      val mins = recordedSeconds / 60
-      val secs = recordedSeconds % 60
-      Text(
-        text =
-          if (isRecording) "Recording Audio • %02d:%02d".format(mins, secs)
-          else "Audio Sync • %02d:%02d ($strokeCount synced strokes)".format(mins, secs),
-        color = TextPrimaryWhite,
-        fontSize = 12.sp,
-        fontWeight = FontWeight.Medium,
-      )
-    }
-
-    Row(
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-      Row(
-        modifier =
-          Modifier
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (isPlayingReplay) SwitchBlue else Color(0xFF253554))
-            .clickable(onClick = onToggleReplay)
-            .padding(horizontal = 10.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-      ) {
-        Icon(
-          imageVector = if (isPlayingReplay) Icons.Default.Pause else Icons.Default.PlayArrow,
-          contentDescription = "Replay synced strokes",
-          tint = Color.White,
-          modifier = Modifier.size(14.dp),
-        )
-        Text(
-          text = if (isPlayingReplay) "Replaying Ink..." else "Replay Audio + Ink",
-          color = Color.White,
-          fontSize = 11.sp,
-          fontWeight = FontWeight.SemiBold,
-        )
-      }
-
-      Icon(
-        imageVector = Icons.Default.Close,
-        contentDescription = "Close Audio Bar",
-        tint = TextSecondaryGray,
-        modifier = Modifier.size(17.dp).clickable(onClick = onCloseAudioBar),
-      )
-    }
-  }
-}
 
 /**
  * Time Keeper (Countdown Study Timer & Stopwatch) Popover inside the toolbar.
@@ -779,18 +685,7 @@ fun ToolbarCustomizationPopover(
         modifier = Modifier.padding(start = 8.dp, bottom = 6.dp),
       )
 
-      // Exact 8 Official Goodnotes Toolbar Items from IMG_0531 Left Panel
-      val customizableMainTools =
-        listOf(
-          PrimaryTool.WRITING_TOOLS,
-          PrimaryTool.ERASER,
-          PrimaryTool.TEXT,
-          PrimaryTool.ELEMENTS,
-          PrimaryTool.IMAGE,
-          PrimaryTool.SHAPE,
-          PrimaryTool.STICKY_NOTE,
-          PrimaryTool.LASER,
-        )
+      val customizableMainTools = PrimaryTool.entries
 
       Column(
         modifier =
@@ -1037,109 +932,7 @@ fun ToolbarCustomizationPopover(
   }
 }
 
-/**
- * AI Handwriting Assist & Math Conversion Popover.
- */
-@Composable
-fun AiHandwritingAssistPopover(
-  strokeCount: Int,
-  onInsertConvertedTextBox: (String) -> Unit,
-  onDismiss: () -> Unit,
-  modifier: Modifier = Modifier,
-) {
-  Column(
-    modifier =
-      modifier
-        .width(292.dp)
-        .shadow(18.dp, RoundedCornerShape(16.dp))
-        .clip(RoundedCornerShape(16.dp))
-        .background(PopoverBg)
-        .border(1.dp, PopoverDivider, RoundedCornerShape(16.dp))
-        .padding(16.dp)
-        .testTag("ai_assist_popover"),
-  ) {
-    Row(
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-      Icon(
-        imageVector = Icons.Outlined.AutoAwesome,
-        contentDescription = null,
-        tint = Color(0xFF67C8EB),
-        modifier = Modifier.size(18.dp),
-      )
-      Text(
-        text = "Handwriting Assist & Math",
-        color = TextPrimaryWhite,
-        fontSize = 14.5.sp,
-        fontWeight = FontWeight.SemiBold,
-      )
-    }
 
-    Spacer(modifier = Modifier.height(8.dp))
-    Text(
-      text = "Analyzed $strokeCount handwritten strokes on this page:",
-      color = TextSecondaryGray,
-      fontSize = 11.5.sp,
-    )
-    Spacer(modifier = Modifier.height(8.dp))
-
-    Box(
-      modifier =
-        Modifier
-          .fillMaxWidth()
-          .clip(RoundedCornerShape(10.dp))
-          .background(PopoverInnerBg)
-          .padding(12.dp),
-    ) {
-      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(
-          text = "• Spellcheck: All handwritten terms verified.",
-          color = Color(0xFF00E676),
-          fontSize = 11.5.sp,
-        )
-        Text(
-          text = "• Math Solver: ∫ x² dx = (1/3)x³ + C",
-          color = TextPrimaryWhite,
-          fontSize = 12.sp,
-          fontWeight = FontWeight.Medium,
-        )
-      }
-    }
-
-    Spacer(modifier = Modifier.height(10.dp))
-
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-      Box(
-        modifier =
-          Modifier
-            .weight(1f)
-            .height(34.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(SwitchBlue)
-            .clickable {
-              onInsertConvertedTextBox("∫ x² dx = (1/3)x³ + C — Verified Note")
-              onDismiss()
-            },
-        contentAlignment = Alignment.Center,
-      ) {
-        Text("Insert as Text", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-      }
-      Box(
-        modifier =
-          Modifier
-            .height(34.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .background(PopoverCardSelected)
-            .clickable(onClick = onDismiss)
-            .padding(horizontal = 12.dp),
-        contentAlignment = Alignment.Center,
-      ) {
-        Text("Close", color = TextPrimaryWhite, fontSize = 12.sp)
-      }
-    }
-  }
-}
 
 /**
  * Create New Notebook / Import PDF Modal Dialog.

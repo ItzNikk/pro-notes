@@ -79,6 +79,7 @@ import com.example.ui.components.TemplatePreviewCanvas
 import com.example.ui.components.UnlockVaultDialog
 import com.example.ui.screens.DocumentsScreen
 import com.example.ui.screens.EditorScreen
+import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.LocalProNotesColors
 import com.example.ui.theme.MyApplicationTheme
@@ -277,7 +278,7 @@ fun ProNotesAppRoot(
             )
           },
           onImportPdfDocument = { pdfPickerLauncher.launch(arrayOf("application/pdf")) },
-          onCreateFolder = { name, _ -> viewModel.createFolder(name) },
+          onCreateFolder = { name, colorArgb -> viewModel.createFolder(name, colorArgb = colorArgb) },
           onNavigateToFolder = viewModel::navigateToFolder,
           onNavigateUpFolder = viewModel::navigateUpFolder,
           onRenameFolder = viewModel::renameFolder,
@@ -350,6 +351,7 @@ fun ProNotesAppRoot(
           onEmptyTrash = viewModel::emptyTrash,
           onResetAllDataToDefaults = viewModel::clearAllLocalStorage,
           onNavigateBack = viewModel::closeSettingsScreen,
+          onReplayOnboarding = viewModel::replayOnboardingDebug,
         )
       }
 
@@ -488,6 +490,12 @@ fun ProNotesAppRoot(
         notebookTitle = lockedDoc?.title ?: "Locked Vault Notebook",
         onAttemptUnlock = { pin -> viewModel.attemptUnlockVaultNotebook(pendingVaultId, pin) },
         onDismiss = viewModel::dismissPendingVaultUnlock,
+      )
+    }
+
+    if (uiState.isOnboardingVisible) {
+      OnboardingScreen(
+        onStartCreating = viewModel::completeOnboarding,
       )
     }
   }

@@ -38,6 +38,7 @@ import com.example.model.PageSizePreset
 import com.example.model.PaperColorTheme
 import com.example.model.PaperTemplate
 import com.example.model.PenStyle
+import com.example.model.PendingCircleLassoLoop
 import com.example.model.PrimaryTool
 import com.example.model.RulerState
 import com.example.model.ScreenMode
@@ -48,7 +49,9 @@ import com.example.model.StrokePattern
 import com.example.model.StudyTapeItem
 import com.example.model.ToolbarDockPosition
 import com.example.model.WritingSubTool
+import com.example.model.computePointsBounds
 import com.example.model.isClosedCircleLoop
+import com.example.model.orderLoopPointsFromEndpoint
 import com.example.ui.theme.SwatchRoyalBlue
 import com.example.util.PdfImportHelper
 import java.text.SimpleDateFormat
@@ -62,6 +65,8 @@ import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -112,6 +117,8 @@ data class ProNotesUiState(
   val fillShapes: Boolean = true,
   val activeShapeEditStrokeId: String? = null,
   val laserMode: LaserMode = LaserMode.FADING_TRAIL,
+  val laserColor: Color = Color(0xFFFF2D55),
+  val pendingCircleLoop: PendingCircleLassoLoop? = null,
   val lassoFilters: LassoFilterSettings = LassoFilterSettings(),
   val selectedThicknessIndex: Int = 1,
   val thicknessPresets: List<Float> = listOf(3.5f, 6.5f, 11.5f),
@@ -148,6 +155,10 @@ data class ProNotesUiState(
   val searchQuery: String = "",
   val isSearchBarVisible: Boolean = false,
   val statusToastMessage: String? = null,
+  val isOnboardingVisible: Boolean = false,
+  val circleLassoConversionToken: Long = 0L,
+  val convertingCircleLassoColor: Color = SwatchRoyalBlue,
+  val convertingCircleLassoWidth: Float = 6.5f,
 ) {
   fun canUndo(docId: String = activeTabId): Boolean =
     undoHistory[docId]?.isNotEmpty() == true
@@ -182,6 +193,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   val uiState: StateFlow<ProNotesUiState> = _uiState.asStateFlow()
 
   private var pxPerDp = 1f
+  private var pendingLassoTimeoutJob: Job? = null
+  private var pendingEraseSave = false
   private val deletedNotebookIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
   private val deletedFolderIds = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
@@ -302,6 +315,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         DefaultCustomPalette
       }
 
+    val hasCompletedOnboarding = prefs.getBoolean("has_completed_onboarding", false)
+
     return ProNotesUiState(
       appThemeMode = themeMode,
       libraryViewMode = viewMode,
@@ -318,7 +333,24 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       quickSwatches = loadedSwatches,
       customPalette = loadedPalette,
       selectedColor = loadedSwatches.firstOrNull() ?: SwatchRoyalBlue,
+      isOnboardingVisible = !hasCompletedOnboarding,
     )
+  }
+
+  fun completeOnboarding() {
+    prefs.edit().putBoolean("has_completed_onboarding", true).apply()
+    _uiState.update { it.copy(isOnboardingVisible = false) }
+  }
+
+  fun replayOnboardingDebug() {
+    if (com.example.BuildConfig.DEBUG) {
+      _uiState.update {
+        it.copy(
+          isOnboardingVisible = true,
+          screenMode = ScreenMode.DOCUMENTS,
+        )
+      }
+    }
   }
 
   fun setAppThemeMode(mode: AppThemeMode) {
@@ -409,20 +441,26 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   }
 
   fun switchToDocuments() {
+    commitPendingCircleLoopAsHandwriting()
     flushActiveDocumentOnPause()
     _uiState.update {
       it.copy(
         screenMode = ScreenMode.DOCUMENTS,
         activePopover = ActivePopover.NONE,
+        laserTrails = emptyList(),
+        pendingCircleLoop = null,
       )
     }
   }
 
   fun openSettingsScreen() {
+    commitPendingCircleLoopAsHandwriting()
     _uiState.update {
       it.copy(
         screenMode = ScreenMode.SETTINGS,
         activePopover = ActivePopover.NONE,
+        laserTrails = emptyList(),
+        pendingCircleLoop = null,
       )
     }
   }
@@ -440,6 +478,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   }
 
   fun openDocument(notebookId: String) {
+    commitPendingCircleLoopAsHandwriting()
     _uiState.update { state ->
       val targetDoc = state.notebooks.find { it.id == notebookId }
       if (
@@ -466,11 +505,14 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         activePopover = ActivePopover.NONE,
         showLassoSelection = false,
         isLassoResizeMode = false,
+        laserTrails = emptyList(),
+        pendingCircleLoop = null,
       )
     }
   }
 
   fun closeTab(notebookId: String) {
+    commitPendingCircleLoopAsHandwriting()
     _uiState.update { state ->
       val remaining = state.openTabIds.filterNot { it == notebookId }
       if (remaining.isEmpty()) {
@@ -479,6 +521,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           openTabIds = emptyList(),
           activeTabId = "",
           activePopover = ActivePopover.NONE,
+          laserTrails = emptyList(),
+          pendingCircleLoop = null,
         )
       } else {
         val nextActive =
@@ -487,6 +531,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           openTabIds = remaining,
           activeTabId = nextActive,
           activePopover = ActivePopover.NONE,
+          laserTrails = emptyList(),
+          pendingCircleLoop = null,
         )
       }
     }
@@ -541,6 +587,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   fun createFolder(
     name: String,
     parentFolderId: String? = _uiState.value.currentFolderId,
+    colorArgb: Long = 0xFF4C8DF6L,
   ) {
     val trimmed = name.trim().ifBlank { "Untitled Folder" }
     val now = System.currentTimeMillis()
@@ -549,6 +596,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         id = "fld_$now",
         name = trimmed,
         parentFolderId = parentFolderId,
+        colorArgb = colorArgb,
         createdAtEpochMs = now,
         updatedAtEpochMs = now,
         isTrashed = false,
@@ -556,7 +604,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     _uiState.update { state ->
       state.copy(
         folders = (state.folders + folder).sortedBy { it.name.lowercase() },
-        statusToastMessage = "Created folder \"$trimmed\"",
       )
     }
     viewModelScope.launch { repository.saveFolder(folder) }
@@ -577,7 +624,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         }
       state.copy(
         folders = nextFolders,
-        statusToastMessage = "Renamed folder to \"$trimmed\"",
       )
     }
     updatedFolder?.let { folder -> viewModelScope.launch { repository.saveFolder(folder) } }
@@ -1004,6 +1050,9 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   }
 
   fun selectPrimaryTool(tool: PrimaryTool) {
+    if (_uiState.value.primaryTool != tool) {
+      commitPendingCircleLoopAsHandwriting()
+    }
     _uiState.update { state ->
       val nextPopover =
         when {
@@ -1028,9 +1077,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           tool == state.primaryTool && tool == PrimaryTool.SHAPE ->
             if (state.activePopover == ActivePopover.SHAPE_SETTINGS) ActivePopover.NONE
             else ActivePopover.SHAPE_SETTINGS
-          tool == PrimaryTool.ELEMENTS ->
-            if (state.activePopover == ActivePopover.ELEMENTS_PICKER) ActivePopover.NONE
-            else ActivePopover.ELEMENTS_PICKER
           else -> ActivePopover.NONE
         }
       state.copy(
@@ -1040,11 +1086,19 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         isLassoResizeMode = if (tool == PrimaryTool.LASSO) state.isLassoResizeMode else false,
         activeShapeEditStrokeId = if (tool == PrimaryTool.SHAPE) state.activeShapeEditStrokeId else null,
         isEyedropperActive = false,
+        laserTrails = if (tool == PrimaryTool.LASER) state.laserTrails else emptyList(),
+        circleLassoConversionToken = 0L,
       )
     }
   }
 
   fun selectWritingSubTool(subTool: WritingSubTool) {
+    if (
+      _uiState.value.primaryTool != PrimaryTool.WRITING_TOOLS ||
+        _uiState.value.activeWritingSubTool != subTool
+    ) {
+      commitPendingCircleLoopAsHandwriting()
+    }
     _uiState.update { state ->
       val isAlreadySelected =
         state.primaryTool == PrimaryTool.WRITING_TOOLS && state.activeWritingSubTool == subTool
@@ -1068,6 +1122,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         showLassoSelection = false,
         isLassoResizeMode = false,
         isEyedropperActive = false,
+        laserTrails = emptyList(),
       )
     }
   }
@@ -1097,35 +1152,20 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
 
   fun toggleSPenBarrelButtonMode() {
     _uiState.update { state ->
-      val next = !state.isSPenBarrelButtonActive
-      state.copy(
-        isSPenBarrelButtonActive = next,
-        statusToastMessage =
-          if (next) "S Pen Barrel Button Active → Instant Eraser"
-          else "S Pen Barrel Button Released → ${state.primaryTool.label}",
-      )
+      state.copy(isSPenBarrelButtonActive = !state.isSPenBarrelButtonActive)
     }
   }
 
   fun togglePrivacyScreenShield(enabled: Boolean) {
     prefs.edit().putBoolean("privacy_screen_shield", enabled).apply()
     _uiState.update {
-      it.copy(
-        privacyScreenShieldEnabled = enabled,
-        statusToastMessage =
-          if (enabled) "Privacy Screen Shield ON (blocks screenshots & recording)"
-          else "Privacy Screen Shield OFF",
-      )
+      it.copy(privacyScreenShieldEnabled = enabled)
     }
   }
 
   fun toggleWatermarkConfidentialExports(enabled: Boolean) {
     _uiState.update {
-      it.copy(
-        watermarkConfidentialExports = enabled,
-        statusToastMessage =
-          if (enabled) "PDF Export Watermark Enabled" else "PDF Export Watermark Disabled",
-      )
+      it.copy(watermarkConfidentialExports = enabled)
     }
   }
 
@@ -1216,10 +1256,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   fun setPageScrollDirection(direction: PageScrollDirection) {
     prefs.edit().putString("page_scroll_direction", direction.name).apply()
     _uiState.update {
-      it.copy(
-        pageScrollDirection = direction,
-        statusToastMessage = "Scrolling Direction: ${direction.label}",
-      )
+      it.copy(pageScrollDirection = direction)
     }
   }
 
@@ -1234,7 +1271,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   }
 
   fun moveSubToolbar(delta: Offset) {
-    // Sub-toolbar is now cleanly docked below the primary toolbar (Stage 4)
+    // Sub-toolbar is docked below the primary toolbar
   }
 
   fun resetSubToolbarPosition() {
@@ -1244,12 +1281,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   fun toggleOnlyDrawWithStylus(enabled: Boolean) {
     prefs.edit().putBoolean("only_draw_with_stylus", enabled).apply()
     _uiState.update {
-      it.copy(
-        onlyDrawWithStylus = enabled,
-        statusToastMessage =
-          if (enabled) "Stylus-Only ON: Stylus draws, Finger swipes & pinch-zooms"
-          else "Stylus+Touch ON: Stylus & 1 finger draw, 2 fingers swipe & zoom",
-      )
+      it.copy(onlyDrawWithStylus = enabled)
     }
   }
 
@@ -1295,18 +1327,15 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
 
   fun toggleCircleToLasso(enabled: Boolean) {
     prefs.edit().putBoolean("circle_to_lasso", enabled).apply()
+    if (!enabled) {
+      commitPendingCircleLoopAsHandwriting()
+    }
     _uiState.update { it.copy(circleToLasso = enabled) }
   }
 
   fun toggleHighlighterStraightLine() {
     _uiState.update {
-      val next = !it.highlighterStraightLine
-      it.copy(
-        highlighterStraightLine = next,
-        statusToastMessage =
-          if (next) "Highlighter: Straight Line Mode ON"
-          else "Highlighter: Freehand Mode",
-      )
+      it.copy(highlighterStraightLine = !it.highlighterStraightLine)
     }
   }
 
@@ -1380,7 +1409,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         lastAutoDetectedShape = kind,
         activeShapeEditStrokeId = strokeId,
         activePopover = ActivePopover.NONE,
-        statusToastMessage = "Inserted ${kind.label}",
       )
     }
     persistDocumentAsync(savedDoc)
@@ -1395,7 +1423,29 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       val next =
         if (state.laserMode == LaserMode.FADING_TRAIL) LaserMode.HOVERING_DOT
         else LaserMode.FADING_TRAIL
-      state.copy(laserMode = next)
+      state.copy(
+        laserMode = next,
+        laserTrails = if (next == LaserMode.HOVERING_DOT) emptyList() else state.laserTrails,
+      )
+    }
+  }
+
+  fun selectLaserMode(mode: LaserMode) {
+    _uiState.update { state ->
+      state.copy(
+        laserMode = mode,
+        laserTrails = if (mode == LaserMode.HOVERING_DOT) emptyList() else state.laserTrails,
+      )
+    }
+  }
+
+  fun selectLaserColor(color: Color) {
+    _uiState.update { it.copy(laserColor = color) }
+  }
+
+  fun clearLaserTrails() {
+    _uiState.update { state ->
+      if (state.laserTrails.isEmpty()) state else state.copy(laserTrails = emptyList())
     }
   }
 
@@ -1488,7 +1538,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           quickSwatches = updatedSwatches,
           activePopover = ActivePopover.NONE,
           isEyedropperActive = false,
-          statusToastMessage = "Recolored selected items",
         )
       } else {
         state.copy(
@@ -1516,7 +1565,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         quickSwatches = updatedSwatches,
         selectedSwatchIndex = newIdx,
         selectedColor = color,
-        statusToastMessage = "Added color slot #${newIdx + 1}",
       )
     }
   }
@@ -1530,7 +1578,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       state.copy(
         customPalette = updatedPalette,
         selectedColor = color,
-        statusToastMessage = "Saved custom color to palette",
       )
     }
   }
@@ -1538,9 +1585,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   fun removeCurrentToolbarSwatchSlot() {
     _uiState.update { state ->
       if (state.quickSwatches.size <= 2) {
-        return@update state.copy(
-          statusToastMessage = "At least 2 color slots must remain in toolbar"
-        )
+        return@update state
       }
       val removeIdx = state.selectedSwatchIndex.coerceIn(0, state.quickSwatches.lastIndex)
       val updatedSwatches = state.quickSwatches.filterIndexed { idx, _ -> idx != removeIdx }
@@ -1550,7 +1595,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         quickSwatches = updatedSwatches,
         selectedSwatchIndex = nextIdx,
         selectedColor = updatedSwatches[nextIdx],
-        statusToastMessage = "Removed color slot from toolbar",
       )
     }
   }
@@ -1560,9 +1604,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       state.copy(
         isEyedropperActive = !state.isEyedropperActive,
         activePopover = ActivePopover.NONE,
-        statusToastMessage =
-          if (!state.isEyedropperActive) "Eyedropper: tap any stroke on page to sample color"
-          else null,
       )
     }
   }
@@ -1586,7 +1627,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         selectedColor = sampled,
         quickSwatches = updatedSwatches,
         isEyedropperActive = false,
-        statusToastMessage = "Sampled color to toolbar slot",
       )
     }
   }
@@ -1619,23 +1659,39 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   }
 
   private fun isStrokeHitByPoint(stroke: DrawnStroke, target: Offset, radius: Float): Boolean {
-    val effectiveRadius = radius + (stroke.strokeWidth * 0.5f)
-    if (stroke.points.isEmpty()) return false
-    if (stroke.points.size == 1) {
-      return (stroke.points.first() - target).getDistance() <= effectiveRadius
+    val pts = stroke.points
+    if (pts.isEmpty()) return false
+    val effectiveRadius = radius + (stroke.strokeWidth * 0.35f)
+    if (pts.size == 1) {
+      return (pts.first() - target).getDistance() <= effectiveRadius
     }
-    for (i in 0 until stroke.points.size - 1) {
-      val a = stroke.points[i]
-      val b = stroke.points[i + 1]
+    var minX = Float.POSITIVE_INFINITY
+    var maxX = Float.NEGATIVE_INFINITY
+    var minY = Float.POSITIVE_INFINITY
+    var maxY = Float.NEGATIVE_INFINITY
+    for (i in pts.indices) {
+      val pt = pts[i]
+      if (pt.x < minX) minX = pt.x
+      if (pt.x > maxX) maxX = pt.x
+      if (pt.y < minY) minY = pt.y
+      if (pt.y > maxY) maxY = pt.y
+    }
+    if (
+      target.x < minX - effectiveRadius ||
+        target.x > maxX + effectiveRadius ||
+        target.y < minY - effectiveRadius ||
+        target.y > maxY + effectiveRadius
+    ) {
+      return false
+    }
+    for (i in 0 until pts.size - 1) {
+      val a = pts[i]
+      val b = pts[i + 1]
       if (distanceToSegment(target, a, b) <= effectiveRadius) {
         return true
       }
     }
     if (stroke.isShape && stroke.shapeFill) {
-      val minX = stroke.points.minOf { it.x }
-      val maxX = stroke.points.maxOf { it.x }
-      val minY = stroke.points.minOf { it.y }
-      val maxY = stroke.points.maxOf { it.y }
       if (target.x in minX..maxX && target.y in minY..maxY) {
         return true
       }
@@ -1670,18 +1726,24 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     return result
   }
 
-  fun eraseAtPoints(points: List<Offset>, forceTemporaryEraser: Boolean = false) {
-    if (points.isEmpty()) return
-    var savedDoc: NotebookDocument? = null
+  fun eraseAtPoints(
+    points: List<Offset>,
+    forceTemporaryEraser: Boolean = false,
+    zoomScale: Float = 1f,
+    recordUndo: Boolean = true,
+  ): Boolean {
+    if (points.isEmpty()) return false
+    var anyErased = false
+    val safeZoom = zoomScale.coerceIn(0.25f, 5f)
     _uiState.update { state ->
       if (state.isReadOnlyMode) return@update state
       val currentDoc = state.notebooks.find { it.id == state.activeTabId } ?: return@update state
       val beforePage = currentDoc.currentPage
       val mode = state.eraserMode
-      val hitRadius = state.eraserRadius
+      val hitRadius = (state.eraserRadius / safeZoom).coerceIn(4f, 64f)
 
       var pageChanged = false
-      val (updatedNotebooks, modifiedDoc) =
+      val (updatedNotebooks, _) =
         updateCurrentPage(state) { page ->
           val nextStrokes =
             when (mode) {
@@ -1693,24 +1755,25 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
               }
 
               EraserMode.PRECISION -> {
+                val precisionRadius = hitRadius * 0.85f
                 page.strokes.flatMap { stroke ->
-                  val densePts =
-                    if (stroke.isShape || stroke.points.size < 12) {
-                      densifyPolyline(stroke.points, 7f)
-                    } else {
-                      stroke.points
-                    }
                   val hitsAny =
-                    points.any { erasePt -> isStrokeHitByPoint(stroke, erasePt, hitRadius * 0.85f) }
+                    points.any { erasePt -> isStrokeHitByPoint(stroke, erasePt, precisionRadius) }
                   if (!hitsAny) {
                     listOf(stroke)
                   } else {
                     pageChanged = true
+                    val densePts =
+                      if (stroke.isShape || stroke.points.size < 12) {
+                        densifyPolyline(stroke.points, 7f)
+                      } else {
+                        stroke.points
+                      }
                     val segments = mutableListOf<List<Offset>>()
                     var currentSegment = mutableListOf<Offset>()
                     for (pt in densePts) {
                       val erased =
-                        points.any { erasePt -> (pt - erasePt).getDistance() <= hitRadius * 0.85f }
+                        points.any { erasePt -> (pt - erasePt).getDistance() <= precisionRadius }
                       if (!erased) {
                         currentSegment.add(pt)
                       } else {
@@ -1751,7 +1814,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
               page.studyTapes.filterNot { tape ->
                 points.any { erasePt ->
                   distanceFromPointToSegment(erasePt, tape.start, tape.end) <=
-                    (hitRadius + tape.thickness / 2f)
+                    (hitRadius + tape.thickness * 0.4f)
                 }
               }
             }
@@ -1767,28 +1830,28 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       if (!pageChanged) {
         return@update state
       }
-      savedDoc = modifiedDoc
-      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Erase")
+      anyErased = true
+      pendingEraseSave = true
+      val (nextUndo, nextRedo) =
+        if (recordUndo) recordHistorySnapshot(state, "Erase")
+        else (state.undoHistory to state.redoHistory)
 
-      val nextTool =
-        if (
-          !forceTemporaryEraser &&
-            state.primaryTool == PrimaryTool.ERASER &&
-            state.eraserAutoDeselect
-        ) {
-          PrimaryTool.WRITING_TOOLS
-        } else {
-          state.primaryTool
-        }
       state.copy(
         notebooks = updatedNotebooks,
         undoHistory = nextUndo,
         redoHistory = nextRedo,
-        primaryTool = nextTool,
         activeShapeEditStrokeId = null,
       )
     }
-    persistDocumentAsync(savedDoc)
+    return anyErased
+  }
+
+  fun finishEraserGesture() {
+    if (!pendingEraseSave) return
+    pendingEraseSave = false
+    val state = _uiState.value
+    val activeDoc = state.notebooks.find { it.id == state.activeTabId } ?: return
+    persistDocumentAsync(activeDoc)
   }
 
   private fun computeLassoSelection(
@@ -1863,52 +1926,176 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     )
   }
 
-  fun tryConvertDrawnCircleStrokeToLassoAtHold(holdPoint: Offset): Boolean {
+  /**
+   * Starts a temporary 800ms pending-loop window after the user draws a closed freehand loop
+   * with Pen or Pencil when Circle-to-Select is enabled.
+   * Uses a single cancellable timeout job.
+   */
+  fun startPendingCircleLassoLoop(
+    points: List<Offset>,
+    pressures: List<Float>,
+  ) {
+    if (points.size < 14) return
+    // Commit any prior pending loop before starting a new one
+    commitPendingCircleLoopAsHandwriting()
+
     val state = _uiState.value
-    if (!state.circleToLasso || state.isReadOnlyMode) return false
-    val isPenOrPencil =
-      state.primaryTool == PrimaryTool.WRITING_TOOLS &&
-        (state.activeWritingSubTool == WritingSubTool.PEN ||
-          state.activeWritingSubTool == WritingSubTool.PENCIL)
-    if (!isPenOrPencil) return false
-    val page = state.notebooks.find { it.id == state.activeTabId }?.currentPage ?: return false
+    val baseWidth = state.thicknessPresets.getOrElse(state.selectedThicknessIndex) { 6.5f }
+    val subTool = state.activeWritingSubTool
+    val isPencil = subTool == WritingSubTool.PENCIL
+    val strokeColor = if (isPencil) state.selectedColor.copy(alpha = 0.78f) else state.selectedColor
+    val strokeW = if (isPencil) baseWidth * 0.9f else baseWidth
+    val smoothed = smoothPoints(points, state.strokeStabilization)
+    val bounds = computePointsBounds(smoothed)
+    val now = System.currentTimeMillis()
 
-    val circle = page.strokes.maxByOrNull { it.timestampMs } ?: return false
-    if (System.currentTimeMillis() - circle.timestampMs > 4000L) return false
-    if (circle.isHighlighter || circle.isShape || !isClosedCircleLoop(circle.points)) return false
-    if (
-      !LassoShape(circle.points).contains(holdPoint) &&
-        !isStrokeHitByPoint(circle, holdPoint, 48f)
-    ) {
-      return false
+    val pendingLoop =
+      PendingCircleLassoLoop(
+        firstPoint = smoothed.first(),
+        lastPoint = smoothed.last(),
+        loopBounds = bounds,
+        points = smoothed,
+        pressures = pressures,
+        color = strokeColor,
+        strokeWidth = strokeW,
+        subTool = subTool,
+        penStyle = state.penStyle,
+        expiryTimeMs = now + 800L,
+        isActivated = false,
+      )
+
+    _uiState.update { it.copy(pendingCircleLoop = pendingLoop) }
+
+    pendingLassoTimeoutJob?.cancel()
+    pendingLassoTimeoutJob =
+      viewModelScope.launch {
+        delay(800L)
+        commitPendingCircleLoopAsHandwriting()
+      }
+  }
+
+  /**
+   * Cancels the pending-loop timer and commits the pending loop as normal handwriting.
+   */
+  fun commitPendingCircleLoopAsHandwriting() {
+    pendingLassoTimeoutJob?.cancel()
+    pendingLassoTimeoutJob = null
+    val pending = _uiState.value.pendingCircleLoop ?: return
+    if (pending.isActivated) {
+      _uiState.update { it.copy(pendingCircleLoop = null) }
+      return
     }
-
-    val remaining = page.copy(strokes = page.strokes.filterNot { it.id == circle.id })
-    val selection = computeLassoSelection(circle.points, remaining, state.lassoFilters)
-    if (selection.totalCount == 0) return false
-
     var savedDoc: NotebookDocument? = null
-    _uiState.update { s ->
-      val (nbs, doc) =
-        updateCurrentPage(s) { p -> p.copy(strokes = p.strokes.filterNot { it.id == circle.id }) }
-      savedDoc = doc
-      s.copy(
-        notebooks = nbs,
-        primaryTool = PrimaryTool.LASSO,
-        showLassoSelection = true,
-        isLassoResizeMode = false,
-        lassoLoopPoints = circle.points,
-        lassoSelectedStrokeIds = selection.strokeIds,
-        lassoSelectedTextBoxIds = selection.textBoxIds,
-        lassoSelectedElementIds = selection.elementIds,
-        lassoSelectedStickyIds = selection.stickyIds,
-        lassoSelectedImageIds = selection.imageIds,
-        statusToastMessage =
-          "${selection.totalCount} item${if (selection.totalCount == 1) "" else "s"} selected",
+    _uiState.update { state ->
+      val currentPending = state.pendingCircleLoop ?: return@update state
+      val geomPoints = currentPending.points
+      val rawPressures = currentPending.pressures
+      val alignedPressures =
+        if (rawPressures.isEmpty()) {
+          emptyList()
+        } else if (rawPressures.size == geomPoints.size) {
+          rawPressures
+        } else {
+          List(geomPoints.size) { idx ->
+            val srcIdx =
+              ((idx.toFloat() / (geomPoints.size - 1).coerceAtLeast(1)) *
+                  (rawPressures.size - 1).coerceAtLeast(0))
+                .toInt()
+                .coerceIn(0, rawPressures.lastIndex)
+            rawPressures[srcIdx]
+          }
+        }
+
+      val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Draw stroke")
+      val stroke =
+        DrawnStroke(
+          id = currentPending.id,
+          points = geomPoints,
+          pressures = alignedPressures,
+          color = currentPending.color,
+          strokeWidth = currentPending.strokeWidth,
+          penStyle = currentPending.penStyle,
+          strokePattern = state.strokePattern,
+          isHighlighter = false,
+          isPencil = currentPending.subTool == WritingSubTool.PENCIL,
+          isShape = false,
+          shapeKind = null,
+          shapeFill = false,
+          shapeControlPoints = emptyList(),
+          zIndex = 1,
+        )
+      val (updatedNotebooks, modifiedDoc) =
+        updateCurrentPage(state) { page ->
+          page.copy(strokes = page.strokes + stroke)
+        }
+      savedDoc = modifiedDoc
+      state.copy(
+        notebooks = updatedNotebooks,
+        undoHistory = nextUndo,
+        redoHistory = nextRedo,
+        pendingCircleLoop = null,
       )
     }
     persistDocumentAsync(savedDoc)
+  }
+
+  /**
+   * Converts the active pending loop into a Lasso selection after the user presses and holds
+   * near either endpoint for ~300ms within the 800ms activation window.
+   * Removes the loop from normal ink when conversion succeeds.
+   */
+  fun activatePendingCircleLoopToLasso(holdPoint: Offset = Offset.Zero): Boolean {
+    pendingLassoTimeoutJob?.cancel()
+    pendingLassoTimeoutJob = null
+    val state = _uiState.value
+    val pending = state.pendingCircleLoop ?: return false
+    val page = state.notebooks.find { it.id == state.activeTabId }?.currentPage
+    val orderedLoopPts = orderLoopPointsFromEndpoint(pending, holdPoint)
+    val selection = computeLassoSelection(orderedLoopPts, page, state.lassoFilters)
+
+    _uiState.update { s ->
+      if (selection.totalCount == 0) {
+        // Empty selection dismisses quietly and removes the loop from ink
+        s.copy(
+          pendingCircleLoop = null,
+          showLassoSelection = false,
+          isLassoResizeMode = false,
+          isLassoColorMenuOpen = false,
+          lassoLoopPoints = emptyList(),
+          lassoSelectedStrokeIds = emptySet(),
+          lassoSelectedTextBoxIds = emptySet(),
+          lassoSelectedElementIds = emptySet(),
+          lassoSelectedStickyIds = emptySet(),
+          lassoSelectedImageIds = emptySet(),
+          circleLassoConversionToken = 0L,
+        )
+      } else {
+        s.copy(
+          pendingCircleLoop = null,
+          primaryTool = PrimaryTool.LASSO,
+          showLassoSelection = true,
+          isLassoResizeMode = false,
+          isLassoColorMenuOpen = false,
+          lassoLoopPoints = orderedLoopPts,
+          lassoSelectedStrokeIds = selection.strokeIds,
+          lassoSelectedTextBoxIds = selection.textBoxIds,
+          lassoSelectedElementIds = selection.elementIds,
+          lassoSelectedStickyIds = selection.stickyIds,
+          lassoSelectedImageIds = selection.imageIds,
+          circleLassoConversionToken = System.currentTimeMillis(),
+          convertingCircleLassoColor = pending.color,
+          convertingCircleLassoWidth = pending.strokeWidth,
+        )
+      }
+    }
     return true
+  }
+
+  fun tryConvertDrawnCircleStrokeToLassoAtHold(holdPoint: Offset): Boolean {
+    if (_uiState.value.pendingCircleLoop != null) {
+      return activatePendingCircleLoopToLasso(holdPoint)
+    }
+    return false
   }
 
   fun triggerInstantCircleToLasso(loopPoints: List<Offset>): Boolean {
@@ -1928,8 +2115,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         lassoSelectedElementIds = selection.elementIds,
         lassoSelectedStickyIds = selection.stickyIds,
         lassoSelectedImageIds = selection.imageIds,
-        statusToastMessage =
-          "${selection.totalCount} item${if (selection.totalCount == 1) "" else "s"} selected",
       )
     }
     return true
@@ -1984,12 +2169,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
 
   fun toggleLassoResizeMode() {
     _uiState.update { state ->
-      val next = !state.isLassoResizeMode
-      state.copy(
-        isLassoResizeMode = next,
-        statusToastMessage =
-          if (next) "Resize/Rotate Mode: Drag bottom-right handle to scale & rotate" else null,
-      )
+      state.copy(isLassoResizeMode = !state.isLassoResizeMode)
     }
   }
 
@@ -2128,7 +2308,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         redoHistory = nextRedo,
         selectedColor = color,
         isLassoColorMenuOpen = false,
-        statusToastMessage = "Recolored selection",
       )
     }
     persistDocumentAsync(savedDoc)
@@ -2174,31 +2353,26 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       )
 
     _uiState.update {
-      it.copy(
-        lassoClipboard = clipboard,
-        statusToastMessage = "Copied $total item${if (total == 1) "" else "s"} to clipboard",
-      )
+      it.copy(lassoClipboard = clipboard)
     }
   }
 
   fun cutLassoSelection() {
     copyLassoSelection()
     deleteLassoSelection()
-    _uiState.update { it.copy(statusToastMessage = "Cut selection to clipboard") }
   }
 
   fun pasteLassoClipboard(targetPosition: Offset? = null) {
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
-      val clipboard =
-        state.lassoClipboard ?: return@update state.copy(statusToastMessage = "Clipboard is empty")
+      val clipboard = state.lassoClipboard ?: return@update state
       val total =
         clipboard.strokes.size +
           clipboard.textBoxes.size +
           clipboard.elements.size +
           clipboard.stickyNotes.size +
           clipboard.images.size
-      if (total == 0) return@update state.copy(statusToastMessage = "Clipboard is empty")
+      if (total == 0) return@update state
 
       val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Paste")
 
@@ -2324,7 +2498,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         lassoSelectedElementIds = newElementIds,
         lassoSelectedStickyIds = newStickyIds,
         lassoSelectedImageIds = newImageIds,
-        statusToastMessage = "Pasted $total item${if (total == 1) "" else "s"}",
       )
     }
     persistDocumentAsync(savedDoc)
@@ -2352,15 +2525,41 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     points: List<Offset>,
     pressures: List<Float> = emptyList(),
     snappedFromHold: Boolean = false,
+    zoomScale: Float = 1f,
   ) {
     if (points.size < 2) return
+    // If any prior pending circle loop exists when a new stroke completes, commit it first
+    if (_uiState.value.pendingCircleLoop != null) {
+      commitPendingCircleLoopAsHandwriting()
+    }
+
+    val preState = _uiState.value
+    if (preState.isReadOnlyMode) return
+    val isWritingToolsActivePre = preState.primaryTool == PrimaryTool.WRITING_TOOLS
+    val subToolPre = preState.activeWritingSubTool
+    val isPenOrPencilPre =
+      isWritingToolsActivePre &&
+        (subToolPre == WritingSubTool.PEN || subToolPre == WritingSubTool.PENCIL)
+
+    // Two-step Circle-to-Lasso: if Circle to Select is enabled and the user drew a closed freehand loop
+    // with Pen or Pencil (and did not trigger draw-and-hold shape snap), enter the 800ms pending-loop window.
+    if (
+      preState.circleToLasso &&
+        isPenOrPencilPre &&
+        !snappedFromHold &&
+        isClosedCircleLoop(points, zoomScale)
+    ) {
+      startPendingCircleLassoLoop(points, pressures)
+      return
+    }
+
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
       if (state.isReadOnlyMode) return@update state
       val docId = state.activeTabId
       val currentDoc = state.notebooks.find { it.id == docId }
 
-      if (state.primaryTool == PrimaryTool.ERASER) {
+      if (state.primaryTool == PrimaryTool.ERASER || state.primaryTool == PrimaryTool.LASER) {
         return@update state
       }
 
@@ -2370,9 +2569,18 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
             points.maxOf { it.x } - points.minOf { it.x },
             points.maxOf { it.y } - points.minOf { it.y },
           )
-        if (diag < 24f) {
+        val selection =
+          if (diag < 20f / zoomScale.coerceIn(0.25f, 5f)) {
+            ComputedLassoSelection(emptySet(), emptySet(), emptySet(), emptySet(), emptySet())
+          } else {
+            computeLassoSelection(points, currentDoc?.currentPage, state.lassoFilters)
+          }
+        // Empty selection dismisses quietly and never saves the lasso loop as handwriting
+        if (selection.totalCount == 0) {
           return@update state.copy(
             showLassoSelection = false,
+            isLassoResizeMode = false,
+            isLassoColorMenuOpen = false,
             lassoLoopPoints = emptyList(),
             lassoSelectedStrokeIds = emptySet(),
             lassoSelectedTextBoxIds = emptySet(),
@@ -2381,7 +2589,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
             lassoSelectedImageIds = emptySet(),
           )
         }
-        val selection = computeLassoSelection(points, currentDoc?.currentPage, state.lassoFilters)
         return@update state.copy(
           showLassoSelection = true,
           isLassoResizeMode = false,
@@ -2392,12 +2599,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           lassoSelectedElementIds = selection.elementIds,
           lassoSelectedStickyIds = selection.stickyIds,
           lassoSelectedImageIds = selection.imageIds,
-          statusToastMessage =
-            if (selection.totalCount > 0) {
-              "Selected ${selection.totalCount} item${if (selection.totalCount == 1) "" else "s"}"
-            } else {
-              "Lasso loop active (no items inside loop)"
-            },
         )
       }
 
@@ -2423,7 +2624,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           notebooks = updated,
           undoHistory = nextUndo,
           redoHistory = nextRedo,
-          statusToastMessage = "Added Study Tape (tap strip to reveal/conceal)",
         )
       }
 
@@ -2461,7 +2661,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
             notebooks = updated,
             undoHistory = nextUndo,
             redoHistory = nextRedo,
-            statusToastMessage = "Scribble to Erase removed stroke",
           )
         }
       }
@@ -2471,7 +2670,10 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       val isExplicitShapeTool =
         state.primaryTool == PrimaryTool.SHAPE ||
           (isWritingToolsActive && subTool == WritingSubTool.DRAW_SHAPE)
-      val isShapeStroke = (isExplicitShapeTool || snappedFromHold) && !isHighlighter
+      val isShapeStroke =
+        (isExplicitShapeTool || snappedFromHold) &&
+          !isHighlighter &&
+          state.pendingCircleLoop == null
 
       val finalPoints =
         if (isHighlighter && (state.highlighterStraightLine || snappedFromHold)) {
@@ -2521,7 +2723,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           pressures = alignedPressures,
           color =
             when {
-              isHighlighter -> state.selectedColor.copy(alpha = 0.38f)
+              isHighlighter -> state.selectedColor.copy(alpha = 0.36f)
               isPencil -> state.selectedColor.copy(alpha = 0.78f)
               else -> state.selectedColor
             },
@@ -2559,12 +2761,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         selectedShapeKind = detectedShapeKind ?: state.selectedShapeKind,
         lastAutoDetectedShape = detectedShapeKind ?: state.lastAutoDetectedShape,
         activeShapeEditStrokeId = if (detectedShapeKind != null) strokeId else null,
-        statusToastMessage =
-          when {
-            detectedShapeKind != null -> "Auto-snapped to ${detectedShapeKind.label}"
-            isHighlighter && snappedFromHold -> "Snapped Highlighter to Straight Line"
-            else -> state.statusToastMessage
-          },
       )
     }
     persistDocumentAsync(savedDoc)
@@ -3230,15 +3426,21 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   fun addLaserTrail(points: List<Offset>) {
     if (points.size < 2) return
     _uiState.update { state ->
-      val trail = com.example.model.LaserTrailStroke(points = points)
-      state.copy(laserTrails = (state.laserTrails + trail).takeLast(12))
+      val clippedPoints = points.takeLast(32)
+      val trail =
+        com.example.model.LaserTrailStroke(
+          points = clippedPoints,
+          color = state.laserColor,
+        )
+      state.copy(laserTrails = (state.laserTrails + trail).takeLast(8))
     }
   }
 
   fun pruneExpiredLaserTrails() {
     val now = System.currentTimeMillis()
     _uiState.update { state ->
-      state.copy(laserTrails = state.laserTrails.filter { now - it.createdAtMs < 1400L })
+      val active = state.laserTrails.filter { now - it.createdAtMs < 650L }
+      if (active.size == state.laserTrails.size) state else state.copy(laserTrails = active)
     }
   }
 
@@ -3269,7 +3471,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         undoHistory = nextUndo,
         redoHistory = nextRedo,
         activePopover = ActivePopover.NONE,
-        statusToastMessage = "Brought selection to front",
       )
     }
     persistDocumentAsync(savedDoc)
@@ -3298,7 +3499,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         undoHistory = nextUndo,
         redoHistory = nextRedo,
         activePopover = ActivePopover.NONE,
-        statusToastMessage = "Sent selection to back",
       )
     }
     persistDocumentAsync(savedDoc)
@@ -3391,7 +3591,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         lassoSelectedElementIds = newElementIds,
         lassoSelectedStickyIds = newStickyIds,
         lassoSelectedImageIds = newImageIds,
-        statusToastMessage = "Duplicated selected items",
       )
     }
     persistDocumentAsync(savedDoc)
@@ -3444,8 +3643,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         lassoSelectedStickyIds = emptySet(),
         lassoSelectedImageIds = emptySet(),
         activePopover = ActivePopover.NONE,
-        statusToastMessage =
-          if (hasSpecificSelection) "Deleted selected items" else "Dismissed empty Lasso",
       )
     }
     persistDocumentAsync(savedDoc)
@@ -3456,6 +3653,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   // =========================================================================
 
   fun undo() {
+    commitPendingCircleLoopAsHandwriting()
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
       val docId = state.activeTabId
@@ -3539,6 +3737,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   }
 
   fun redo() {
+    commitPendingCircleLoopAsHandwriting()
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
       val docId = state.activeTabId
@@ -3595,6 +3794,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   }
 
   fun clearCurrentPageStrokes() {
+    commitPendingCircleLoopAsHandwriting()
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
       val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Clear page")
@@ -3619,7 +3819,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         lassoSelectedStrokeIds = emptySet(),
         activeShapeEditStrokeId = null,
         activePopover = ActivePopover.NONE,
-        statusToastMessage = "Cleared page annotations",
+        laserTrails = emptyList(),
       )
     }
     persistDocumentAsync(savedDoc)
@@ -3630,6 +3830,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   // =========================================================================
 
   fun addNewPageToCurrentDocument() {
+    commitPendingCircleLoopAsHandwriting()
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
       val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Add page")
@@ -3671,7 +3872,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         showLassoSelection = false,
         isLassoResizeMode = false,
         activePopover = ActivePopover.NONE,
-        statusToastMessage = "Added Page ${(savedDoc?.currentPageIndex ?: 0) + 1}",
+        laserTrails = emptyList(),
       )
     }
     persistDocumentAsync(savedDoc)
@@ -3683,6 +3884,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     customTemplate: CustomPageTemplate? = null,
     insertBeforeCurrent: Boolean = false,
   ) {
+    commitPendingCircleLoopAsHandwriting()
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
       val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Add ${template.label} page")
@@ -3723,13 +3925,14 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         showLassoSelection = false,
         isLassoResizeMode = false,
         activePopover = ActivePopover.NONE,
-        statusToastMessage = "Inserted ${template.label} page",
+        laserTrails = emptyList(),
       )
     }
     persistDocumentAsync(savedDoc)
   }
 
   fun duplicateCurrentPage() {
+    commitPendingCircleLoopAsHandwriting()
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
       val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Duplicate page")
@@ -3774,13 +3977,14 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         undoHistory = nextUndo,
         redoHistory = nextRedo,
         activePopover = ActivePopover.NONE,
-        statusToastMessage = "Duplicated Page",
+        laserTrails = emptyList(),
       )
     }
     persistDocumentAsync(savedDoc)
   }
 
   fun deleteCurrentPage() {
+    commitPendingCircleLoopAsHandwriting()
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
       val docId = state.activeTabId
@@ -3819,7 +4023,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         showLassoSelection = false,
         isLassoResizeMode = false,
         activePopover = ActivePopover.NONE,
-        statusToastMessage = "Deleted page",
+        laserTrails = emptyList(),
       )
     }
     persistDocumentAsync(savedDoc)
@@ -3858,13 +4062,13 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         undoHistory = nextUndo,
         redoHistory = nextRedo,
         activePopover = ActivePopover.NONE,
-        statusToastMessage = "Page template set to ${template.label}",
       )
     }
     persistDocumentAsync(savedDoc)
   }
 
   fun selectPageIndex(index: Int) {
+    commitPendingCircleLoopAsHandwriting()
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
       val docId = state.activeTabId
@@ -3884,6 +4088,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         isLassoResizeMode = false,
         lassoLoopPoints = emptyList(),
         activeShapeEditStrokeId = null,
+        laserTrails = emptyList(),
+        pendingCircleLoop = null,
       )
     }
     persistDocumentAsync(savedDoc)
@@ -3919,10 +4125,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           page.copy(pageTemplate = nextTemplate)
         }
       savedDoc = modifiedDoc
-      state.copy(
-        notebooks = updated,
-        statusToastMessage = "Page Template: ${nextTemplate.label}",
-      )
+      state.copy(notebooks = updated)
     }
     persistDocumentAsync(savedDoc)
   }
@@ -3940,10 +4143,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           page.copy(pageColorTheme = nextColor)
         }
       savedDoc = modifiedDoc
-      state.copy(
-        notebooks = updated,
-        statusToastMessage = "Paper Tint: ${nextColor.label}",
-      )
+      state.copy(notebooks = updated)
     }
     persistDocumentAsync(savedDoc)
   }
