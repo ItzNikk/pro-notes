@@ -80,6 +80,7 @@ import com.example.model.LassoFilterSettings
 import com.example.model.PenStyle
 import com.example.model.ShapeKind
 import com.example.model.StrokePattern
+import com.example.model.TapePattern
 import com.example.ui.theme.DangerRed
 import com.example.ui.theme.PopoverBg
 import com.example.ui.theme.PopoverCardSelected
@@ -1463,57 +1464,314 @@ fun LassoSettingsPopover(
   onSendToBack: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val activeCount =
+    listOf(
+      filters.includeHandwriting,
+      filters.includeShapes,
+      filters.includeStudyTapes,
+      filters.includeTextBoxes,
+      filters.includeImages,
+      filters.includeComments,
+    ).count { it }
+
   Column(
     modifier =
       modifier
-        .width(268.dp)
-        .shadow(16.dp, RoundedCornerShape(16.dp))
-        .clip(RoundedCornerShape(16.dp))
-        .background(PopoverBg)
-        .border(1.dp, PopoverDivider, RoundedCornerShape(16.dp))
+        .width(326.dp)
+        .shadow(22.dp, RoundedCornerShape(18.dp))
+        .clip(RoundedCornerShape(18.dp))
+        .background(
+          Brush.verticalGradient(
+            colors = listOf(Color(0xFF1D202A), Color(0xFF15171F)),
+          ),
+        )
+        .border(1.dp, Color(0xFF2E3344), RoundedCornerShape(18.dp))
         .padding(16.dp)
         .testTag("lasso_settings_popover"),
   ) {
+    // Header Row with Active Filter Counter & Select All Quick Action
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Column {
+        Text(
+          text = "Lasso Studio",
+          color = TextPrimaryWhite,
+          fontSize = 15.5.sp,
+          fontWeight = FontWeight.Bold,
+        )
+        Text(
+          text = "$activeCount of 6 layers active • Smart selection",
+          color = Color(0xFF67C8EB),
+          fontSize = 10.5.sp,
+          fontWeight = FontWeight.Medium,
+        )
+      }
+
+      val allSelected = activeCount == 6
+      Box(
+        modifier =
+          Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(if (allSelected) Color(0xFF252936) else SwitchBlue.copy(alpha = 0.22f))
+            .border(
+              1.dp,
+              if (allSelected) Color(0xFF383E52) else SwitchBlue,
+              RoundedCornerShape(8.dp),
+            )
+            .clickable {
+              val next = !allSelected
+              onUpdateFilters(
+                filters.copy(
+                  includeHandwriting = next || true,
+                  includeShapes = next,
+                  includeStudyTapes = next,
+                  includeTextBoxes = next,
+                  includeImages = next,
+                  includeComments = next,
+                )
+              )
+            }
+            .padding(horizontal = 9.dp, vertical = 5.dp)
+            .testTag("lasso_toggle_all_filters_button"),
+      ) {
+        Text(
+          text = if (allSelected) "Ink Only" else "Select All",
+          color = if (allSelected) TextSecondaryGray else Color(0xFF67C8EB),
+          fontSize = 10.5.sp,
+          fontWeight = FontWeight.SemiBold,
+        )
+      }
+    }
+
+    Spacer(modifier = Modifier.height(12.dp))
+
+    // Selection Geometry Mode: Freehand Loop vs Rectangle Marquee
     Text(
-      text = "Lasso Tool",
-      color = TextPrimaryWhite,
-      fontSize = 14.sp,
-      fontWeight = FontWeight.SemiBold,
+      text = "SELECTION GEOMETRY",
+      color = TextSecondaryGray,
+      fontSize = 9.5.sp,
+      fontWeight = FontWeight.Bold,
+      letterSpacing = 0.5.sp,
     )
-    Spacer(modifier = Modifier.height(8.dp))
+    Spacer(modifier = Modifier.height(6.dp))
+    Row(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .clip(RoundedCornerShape(10.dp))
+          .background(Color(0xFF101218))
+          .padding(3.dp),
+      horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+      val modes = listOf(false to "Freehand Loop", true to "Rectangle Box")
+      modes.forEach { (isRect, label) ->
+        val isSel = filters.rectangularMarquee == isRect
+        Row(
+          modifier =
+            Modifier
+              .weight(1f)
+              .height(32.dp)
+              .clip(RoundedCornerShape(8.dp))
+              .background(if (isSel) SwitchBlue else Color.Transparent)
+              .clickable { onUpdateFilters(filters.copy(rectangularMarquee = isRect)) }
+              .testTag(if (isRect) "lasso_mode_rectangle" else "lasso_mode_freehand"),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.Center,
+        ) {
+          Canvas(modifier = Modifier.size(13.dp)) {
+            val c = if (isSel) Color.White else Color(0xFF8E95A5)
+            if (isRect) {
+              drawRect(
+                color = c,
+                style =
+                  Stroke(
+                    width = 1.6.dp.toPx(),
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(5f, 4f), 0f),
+                  ),
+              )
+            } else {
+              drawCircle(
+                color = c,
+                radius = size.minDimension * 0.44f,
+                style =
+                  Stroke(
+                    width = 1.6.dp.toPx(),
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(5f, 4f), 0f),
+                  ),
+              )
+            }
+          }
+          Spacer(modifier = Modifier.width(6.dp))
+          Text(
+            text = label,
+            color = if (isSel) Color.White else TextSecondaryGray,
+            fontSize = 11.5.sp,
+            fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+          )
+        }
+      }
+    }
+
+    Spacer(modifier = Modifier.height(12.dp))
+
+    // 2x3 Visual Filter Cards Grid
+    Text(
+      text = "SELECTABLE CONTENT LAYERS",
+      color = TextSecondaryGray,
+      fontSize = 9.5.sp,
+      fontWeight = FontWeight.Bold,
+      letterSpacing = 0.5.sp,
+    )
+    Spacer(modifier = Modifier.height(6.dp))
+
+    data class FilterCardItem(
+      val title: String,
+      val subtitle: String,
+      val checked: Boolean,
+      val accent: Color,
+      val testTag: String,
+      val onToggle: (Boolean) -> Unit,
+    )
+
+    val filterItems =
+      listOf(
+        FilterCardItem(
+          title = "Handwriting",
+          subtitle = "Ink & Highlighter",
+          checked = filters.includeHandwriting,
+          accent = Color(0xFF38BDF8),
+          testTag = "lasso_filter_handwriting",
+          onToggle = { onUpdateFilters(filters.copy(includeHandwriting = it)) },
+        ),
+        FilterCardItem(
+          title = "Shapes",
+          subtitle = "Snapped Geometry",
+          checked = filters.includeShapes,
+          accent = Color(0xFFA78BFA),
+          testTag = "lasso_filter_shapes",
+          onToggle = { onUpdateFilters(filters.copy(includeShapes = it)) },
+        ),
+        FilterCardItem(
+          title = "Study Tapes",
+          subtitle = "Washi & Flashcards",
+          checked = filters.includeStudyTapes,
+          accent = Color(0xFFF472B6),
+          testTag = "lasso_filter_tapes",
+          onToggle = { onUpdateFilters(filters.copy(includeStudyTapes = it)) },
+        ),
+        FilterCardItem(
+          title = "Text Boxes",
+          subtitle = "Typed Notes",
+          checked = filters.includeTextBoxes,
+          accent = Color(0xFF34D399),
+          testTag = "lasso_filter_text",
+          onToggle = { onUpdateFilters(filters.copy(includeTextBoxes = it)) },
+        ),
+        FilterCardItem(
+          title = "Images",
+          subtitle = "Photos & Stamps",
+          checked = filters.includeImages,
+          accent = Color(0xFFFBBF24),
+          testTag = "lasso_filter_images",
+          onToggle = { onUpdateFilters(filters.copy(includeImages = it)) },
+        ),
+        FilterCardItem(
+          title = "Sticky Notes",
+          subtitle = "Pinned Cards",
+          checked = filters.includeComments,
+          accent = Color(0xFFFB923C),
+          testTag = "lasso_filter_comments",
+          onToggle = { onUpdateFilters(filters.copy(includeComments = it)) },
+        ),
+      )
+
+    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+      filterItems.chunked(2).forEach { rowItems ->
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.spacedBy(7.dp),
+        ) {
+          rowItems.forEach { item ->
+            Row(
+              modifier =
+                Modifier
+                  .weight(1f)
+                  .clip(RoundedCornerShape(11.dp))
+                  .background(
+                    if (item.checked) item.accent.copy(alpha = 0.14f)
+                    else Color(0xFF21242F),
+                  )
+                  .border(
+                    width = if (item.checked) 1.5.dp else 1.dp,
+                    color = if (item.checked) item.accent else Color(0xFF2E3240),
+                    shape = RoundedCornerShape(11.dp),
+                  )
+                  .clickable { item.onToggle(!item.checked) }
+                  .padding(horizontal = 10.dp, vertical = 8.dp)
+                  .testTag(item.testTag),
+              verticalAlignment = Alignment.CenterVertically,
+              horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+              Column(modifier = Modifier.weight(1f)) {
+                Text(
+                  text = item.title,
+                  color = if (item.checked) Color.White else TextSecondaryGray,
+                  fontSize = 11.5.sp,
+                  fontWeight = FontWeight.Bold,
+                  maxLines = 1,
+                )
+                Text(
+                  text = item.subtitle,
+                  color = if (item.checked) item.accent else TextSecondaryGray.copy(alpha = 0.65f),
+                  fontSize = 9.sp,
+                  maxLines = 1,
+                )
+              }
+              Box(
+                modifier =
+                  Modifier
+                    .size(18.dp)
+                    .clip(CircleShape)
+                    .background(if (item.checked) item.accent else Color(0xFF323646)),
+                contentAlignment = Alignment.Center,
+              ) {
+                if (item.checked) {
+                  Icon(
+                    imageVector = Icons.Default.Check,
+                    contentDescription = null,
+                    tint = Color(0xFF0F131A),
+                    modifier = Modifier.size(12.dp),
+                  )
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+
+    Spacer(modifier = Modifier.height(10.dp))
+    HorizontalDivider(color = PopoverDivider, thickness = 0.5.dp)
+    Spacer(modifier = Modifier.height(4.dp))
 
     PopoverToggleRow(
-      label = "Handwriting",
-      checked = filters.includeHandwriting,
-      onCheckedChange = { onUpdateFilters(filters.copy(includeHandwriting = it)) },
-      testTag = "lasso_filter_handwriting",
-    )
-    PopoverToggleRow(
-      label = "Images",
-      checked = filters.includeImages,
-      onCheckedChange = { onUpdateFilters(filters.copy(includeImages = it)) },
-      testTag = "lasso_filter_images",
-    )
-    PopoverToggleRow(
-      label = "Text Boxes",
-      checked = filters.includeTextBoxes,
-      onCheckedChange = { onUpdateFilters(filters.copy(includeTextBoxes = it)) },
-      testTag = "lasso_filter_text",
-    )
-    PopoverToggleRow(
-      label = "Comments",
-      checked = filters.includeComments,
-      onCheckedChange = { onUpdateFilters(filters.copy(includeComments = it)) },
-      testTag = "lasso_filter_comments",
+      label = "Auto-Return to Pen After Moving",
+      checked = filters.autoReturnToPenAfterMove,
+      onCheckedChange = { onUpdateFilters(filters.copy(autoReturnToPenAfterMove = it)) },
+      testTag = "lasso_auto_return_pen_switch",
     )
 
-    HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = PopoverDivider)
+    HorizontalDivider(modifier = Modifier.padding(vertical = 6.dp), color = PopoverDivider)
 
     Text(
       text = "LAYER ORDERING",
       color = TextSecondaryGray,
-      fontSize = 10.sp,
-      fontWeight = FontWeight.Medium,
+      fontSize = 9.5.sp,
+      fontWeight = FontWeight.Bold,
+      letterSpacing = 0.5.sp,
     )
     Spacer(modifier = Modifier.height(6.dp))
 
@@ -1525,9 +1783,10 @@ fun LassoSettingsPopover(
         modifier =
           Modifier
             .weight(1f)
-            .height(34.dp)
-            .clip(RoundedCornerShape(8.dp))
+            .height(36.dp)
+            .clip(RoundedCornerShape(10.dp))
             .background(PopoverCardSelected)
+            .border(1.dp, Color(0xFF383E52), RoundedCornerShape(10.dp))
             .clickable(onClick = onBringToFront)
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1536,20 +1795,21 @@ fun LassoSettingsPopover(
         Icon(
           imageVector = Icons.Outlined.FlipToFront,
           contentDescription = null,
-          tint = TextPrimaryWhite,
+          tint = Color(0xFF67C8EB),
           modifier = Modifier.size(15.dp),
         )
-        Spacer(modifier = Modifier.width(4.dp))
-        Text("Bring to Front", color = TextPrimaryWhite, fontSize = 11.sp)
+        Spacer(modifier = Modifier.width(5.dp))
+        Text("Bring to Front", color = TextPrimaryWhite, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold)
       }
 
       Row(
         modifier =
           Modifier
             .weight(1f)
-            .height(34.dp)
-            .clip(RoundedCornerShape(8.dp))
+            .height(36.dp)
+            .clip(RoundedCornerShape(10.dp))
             .background(PopoverCardSelected)
+            .border(1.dp, Color(0xFF383E52), RoundedCornerShape(10.dp))
             .clickable(onClick = onSendToBack)
             .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -1558,11 +1818,352 @@ fun LassoSettingsPopover(
         Icon(
           imageVector = Icons.Outlined.FlipToBack,
           contentDescription = null,
-          tint = TextPrimaryWhite,
+          tint = Color(0xFF67C8EB),
           modifier = Modifier.size(15.dp),
         )
-        Spacer(modifier = Modifier.width(4.dp))
-        Text("Send to Back", color = TextPrimaryWhite, fontSize = 11.sp)
+        Spacer(modifier = Modifier.width(5.dp))
+        Text("Send to Back", color = TextPrimaryWhite, fontSize = 11.5.sp, fontWeight = FontWeight.SemiBold)
+      }
+    }
+  }
+}
+
+/**
+ * Study Tape & Decorative Washi Tape Studio Popover:
+ * Lets the user pick from 7 decorative tape patterns (Diagonal Stripe, Polka Dot, Grid Washi,
+ * Stardust, Gradient Glow, Exam Caution, Solid), adjust tape thickness, and reveal/cover all tapes on page.
+ */
+@Composable
+fun TapeSettingsPopover(
+  selectedPattern: TapePattern,
+  tapeThickness: Float,
+  selectedColor: Color,
+  studyTapeCountOnPage: Int,
+  onSelectPattern: (TapePattern) -> Unit,
+  onThicknessChange: (Float) -> Unit,
+  onRevealAllTapes: () -> Unit,
+  onCoverAllTapes: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  Column(
+    modifier =
+      modifier
+        .width(322.dp)
+        .shadow(20.dp, RoundedCornerShape(18.dp))
+        .clip(RoundedCornerShape(18.dp))
+        .background(
+          Brush.verticalGradient(
+            colors = listOf(Color(0xFF1D202A), Color(0xFF15171F)),
+          ),
+        )
+        .border(1.dp, Color(0xFF2E3344), RoundedCornerShape(18.dp))
+        .padding(16.dp)
+        .testTag("tape_settings_popover"),
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Column {
+        Text(
+          text = "Study & Washi Tape Studio",
+          color = TextPrimaryWhite,
+          fontSize = 15.sp,
+          fontWeight = FontWeight.Bold,
+        )
+        Text(
+          text = "${selectedPattern.label} • ${selectedPattern.subtitle}",
+          color = Color(0xFF67C8EB),
+          fontSize = 10.5.sp,
+        )
+      }
+      Box(
+        modifier =
+          Modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color(0xFF242836))
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+      ) {
+        Text(
+          text = "$studyTapeCountOnPage on page",
+          color = TextSecondaryGray,
+          fontSize = 10.sp,
+          fontWeight = FontWeight.SemiBold,
+        )
+      }
+    }
+
+    Spacer(modifier = Modifier.height(10.dp))
+
+    // Live Tape Preview Box on White Paper Card
+    Box(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .height(64.dp)
+          .clip(RoundedCornerShape(10.dp))
+          .background(Color(0xFFF8FAFC))
+          .border(1.dp, Color(0xFFCBD5E1), RoundedCornerShape(10.dp)),
+      contentAlignment = Alignment.Center,
+    ) {
+      Text(
+        text = "Hidden Formula: E = mc²",
+        color = Color(0xFF1E293B),
+        fontSize = 13.sp,
+        fontWeight = FontWeight.Bold,
+      )
+      Canvas(modifier = Modifier.fillMaxSize().padding(horizontal = 24.dp)) {
+        val start = Offset(12f, size.height * 0.5f)
+        val end = Offset(size.width - 12f, size.height * 0.5f)
+        val h = tapeThickness.coerceIn(22f, 52f)
+        // Base strip
+        val baseTint =
+          if (selectedPattern == TapePattern.EXAM_CAUTION) Color(0xFFFACC15) else selectedColor
+        drawLine(
+          color = baseTint.copy(alpha = 0.94f),
+          start = start,
+          end = end,
+          strokeWidth = h,
+          cap = StrokeCap.Round,
+        )
+        when (selectedPattern) {
+          TapePattern.SOLID -> {
+            drawLine(
+              color = Color.White.copy(alpha = 0.32f),
+              start = start,
+              end = end,
+              strokeWidth = 2f,
+              cap = StrokeCap.Round,
+              pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f),
+            )
+          }
+          TapePattern.DIAGONAL_STRIPE -> {
+            var x = start.x
+            while (x <= end.x) {
+              drawLine(
+                color = Color.White.copy(alpha = 0.42f),
+                start = Offset((x - 8f).coerceAtLeast(start.x), start.y - h * 0.36f),
+                end = Offset((x + 8f).coerceAtMost(end.x), start.y + h * 0.36f),
+                strokeWidth = 3f,
+                cap = StrokeCap.Round,
+              )
+              x += 16f
+            }
+          }
+          TapePattern.POLKA_DOT -> {
+            var x = start.x + 8f
+            var rowFlip = false
+            while (x <= end.x - 8f) {
+              drawCircle(
+                color = Color.White.copy(alpha = 0.68f),
+                radius = 3.5f,
+                center = Offset(x, start.y + (if (rowFlip) -h * 0.18f else h * 0.18f)),
+              )
+              rowFlip = !rowFlip
+              x += 14f
+            }
+          }
+          TapePattern.GRID_WASHI -> {
+            drawLine(
+              color = Color.White.copy(alpha = 0.38f),
+              start = Offset(start.x, start.y - h * 0.2f),
+              end = Offset(end.x, end.y - h * 0.2f),
+              strokeWidth = 1.6f,
+            )
+            drawLine(
+              color = Color.White.copy(alpha = 0.38f),
+              start = Offset(start.x, start.y + h * 0.2f),
+              end = Offset(end.x, end.y + h * 0.2f),
+              strokeWidth = 1.6f,
+            )
+            var x = start.x + 10f
+            while (x <= end.x - 10f) {
+              drawLine(
+                color = Color.White.copy(alpha = 0.38f),
+                start = Offset(x, start.y - h * 0.38f),
+                end = Offset(x, start.y + h * 0.38f),
+                strokeWidth = 1.6f,
+              )
+              x += 14f
+            }
+          }
+          TapePattern.STARDUST -> {
+            var x = start.x + 12f
+            var idx = 0
+            while (x <= end.x - 12f) {
+              val cy = start.y + (if (idx % 2 == 0) -h * 0.15f else h * 0.15f)
+              drawCircle(color = Color.White.copy(alpha = 0.85f), radius = 2.6f, center = Offset(x, cy))
+              drawLine(
+                color = Color.White.copy(alpha = 0.7f),
+                start = Offset(x - 5f, cy),
+                end = Offset(x + 5f, cy),
+                strokeWidth = 1.4f,
+              )
+              drawLine(
+                color = Color.White.copy(alpha = 0.7f),
+                start = Offset(x, cy - 5f),
+                end = Offset(x, cy + 5f),
+                strokeWidth = 1.4f,
+              )
+              x += 20f
+              idx++
+            }
+          }
+          TapePattern.GRADIENT_GLOW -> {
+            drawLine(
+              color = Color.White.copy(alpha = 0.45f),
+              start = start,
+              end = end,
+              strokeWidth = h * 0.38f,
+              cap = StrokeCap.Round,
+            )
+          }
+          TapePattern.EXAM_CAUTION -> {
+            var x = start.x
+            while (x <= end.x) {
+              drawLine(
+                color = Color(0xFF1E293B).copy(alpha = 0.78f),
+                start = Offset((x - 7f).coerceAtLeast(start.x), start.y - h * 0.36f),
+                end = Offset((x + 7f).coerceAtMost(end.x), start.y + h * 0.36f),
+                strokeWidth = 4.5f,
+                cap = StrokeCap.Square,
+              )
+              x += 16f
+            }
+          }
+        }
+      }
+    }
+
+    Spacer(modifier = Modifier.height(10.dp))
+
+    // 7 Washi Tape Design Selector Cards
+    Text(
+      text = "WASHI TAPE DESIGN",
+      color = TextSecondaryGray,
+      fontSize = 9.5.sp,
+      fontWeight = FontWeight.Bold,
+      letterSpacing = 0.5.sp,
+    )
+    Spacer(modifier = Modifier.height(6.dp))
+
+    Row(
+      modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+      horizontalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+      TapePattern.entries.forEach { pattern ->
+        val isSel = pattern == selectedPattern
+        Column(
+          modifier =
+            Modifier
+              .width(86.dp)
+              .clip(RoundedCornerShape(10.dp))
+              .background(if (isSel) SwitchBlue.copy(alpha = 0.24f) else Color(0xFF21242F))
+              .border(
+                width = if (isSel) 1.5.dp else 1.dp,
+                color = if (isSel) SwitchBlue else Color(0xFF2E3240),
+                shape = RoundedCornerShape(10.dp),
+              )
+              .clickable { onSelectPattern(pattern) }
+              .padding(horizontal = 8.dp, vertical = 8.dp)
+              .testTag("tape_pattern_${pattern.name.lowercase()}"),
+          horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+          Text(
+            text = pattern.label,
+            color = if (isSel) Color.White else TextPrimaryWhite,
+            fontSize = 10.5.sp,
+            fontWeight = if (isSel) FontWeight.Bold else FontWeight.SemiBold,
+            maxLines = 1,
+          )
+          Spacer(modifier = Modifier.height(2.dp))
+          Text(
+            text = pattern.subtitle,
+            color = if (isSel) Color(0xFF67C8EB) else TextSecondaryGray,
+            fontSize = 8.5.sp,
+            maxLines = 1,
+          )
+        }
+      }
+    }
+
+    Spacer(modifier = Modifier.height(10.dp))
+
+    // Tape Thickness Slider
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text(
+        text = "TAPE THICKNESS",
+        color = TextSecondaryGray,
+        fontSize = 9.5.sp,
+        fontWeight = FontWeight.Bold,
+      )
+      Text(
+        text = "${tapeThickness.toInt()} px",
+        color = Color(0xFF67C8EB),
+        fontSize = 10.5.sp,
+        fontWeight = FontWeight.Bold,
+      )
+    }
+    Slider(
+      value = tapeThickness,
+      onValueChange = onThicknessChange,
+      valueRange = 20f..68f,
+      colors =
+        SliderDefaults.colors(
+          thumbColor = Color.White,
+          activeTrackColor = SwitchBlue,
+          inactiveTrackColor = Color(0xFF38383C),
+        ),
+      modifier = Modifier.fillMaxWidth().height(26.dp).testTag("tape_thickness_slider"),
+    )
+
+    if (studyTapeCountOnPage > 0) {
+      HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp), color = PopoverDivider)
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        Box(
+          modifier =
+            Modifier
+              .weight(1f)
+              .height(34.dp)
+              .clip(RoundedCornerShape(8.dp))
+              .background(PopoverCardSelected)
+              .clickable(onClick = onRevealAllTapes)
+              .testTag("tape_reveal_all_button"),
+          contentAlignment = Alignment.Center,
+        ) {
+          Text(
+            text = "Reveal All Tapes",
+            color = Color(0xFF67C8EB),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+          )
+        }
+        Box(
+          modifier =
+            Modifier
+              .weight(1f)
+              .height(34.dp)
+              .clip(RoundedCornerShape(8.dp))
+              .background(PopoverCardSelected)
+              .clickable(onClick = onCoverAllTapes)
+              .testTag("tape_cover_all_button"),
+          contentAlignment = Alignment.Center,
+        ) {
+          Text(
+            text = "Cover All Tapes",
+            color = TextPrimaryWhite,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+          )
+        }
       }
     }
   }

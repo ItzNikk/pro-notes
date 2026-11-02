@@ -67,38 +67,14 @@ import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private data class TourSlide(
-  val title: String,
-  val body: String,
-)
-
-private val OnboardingTourSlides =
-  listOf(
-    TourSlide(
-      title = "1. Hardware Stylus Auto-Detection & Ink",
-      body = "Write naturally with pressure-sensitive pen, pencil, and highlighter tools. Hold your stylus side button anytime to erase effortlessly.",
-    ),
-    TourSlide(
-      title = "2. Goodnotes & Samsung Notes Draw-and-Hold",
-      body = "Sketch any shape freehand and hold your stylus still for 320ms to snap into a clean geometric shape and drag its endpoint live.",
-    ),
-    TourSlide(
-      title = "3. Circle-to-Lasso & Barrel Roll Preview",
-      body = "Draw a closed loop and hold to select strokes (auto-restoring your pen afterward), or rotate your stylus for live barrel-roll color & nib preview.",
-    ),
-  )
-
 @Composable
 fun OnboardingScreen(
   onStartCreating: () -> Unit,
-  onTakeTour: () -> Unit = onStartCreating,
   onStylusAutoDetected: (StylusPenBrand) -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val context = LocalContext.current
   var videoFailed by remember { mutableStateOf(false) }
-  var showTourOverlay by remember { mutableStateOf(false) }
-  var tourStepIndex by remember { mutableIntStateOf(0) }
 
   val detectedStylusInfo = remember(context) {
     StylusInputTracker.detectConnectedStylusHardware(context)
@@ -429,59 +405,6 @@ fun OnboardingScreen(
           }
         }
 
-        AnimatedVisibility(
-          visible = showTourOverlay,
-          enter = fadeIn(tween(220)),
-          exit = fadeOut(tween(180)),
-        ) {
-          val slide = OnboardingTourSlides[tourStepIndex.coerceIn(0, OnboardingTourSlides.lastIndex)]
-          Column(
-            modifier =
-              Modifier
-                .fillMaxWidth()
-                .padding(bottom = 20.dp)
-                .clip(RoundedCornerShape(18.dp))
-                .background(Color(0xD9131C2E))
-                .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(18.dp))
-                .padding(horizontal = 20.dp, vertical = 18.dp)
-                .testTag("onboarding_tour_card"),
-            horizontalAlignment = Alignment.CenterHorizontally,
-          ) {
-            Text(
-              text = slide.title,
-              color = Color.White,
-              fontSize = 16.sp,
-              fontWeight = FontWeight.SemiBold,
-              textAlign = TextAlign.Center,
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-              text = slide.body,
-              color = Color.White.copy(alpha = 0.80f),
-              fontSize = 13.5.sp,
-              lineHeight = 19.sp,
-              textAlign = TextAlign.Center,
-            )
-            Spacer(modifier = Modifier.height(14.dp))
-            Row(
-              horizontalArrangement = Arrangement.spacedBy(8.dp),
-              verticalAlignment = Alignment.CenterVertically,
-            ) {
-              OnboardingTourSlides.indices.forEach { idx ->
-                Box(
-                  modifier =
-                    Modifier
-                      .size(if (idx == tourStepIndex) 8.dp else 6.dp)
-                      .clip(CircleShape)
-                      .background(
-                        if (idx == tourStepIndex) NewButtonBlue else Color.White.copy(alpha = 0.32f)
-                      ),
-                )
-              }
-            }
-          }
-        }
-
         Column(
           modifier =
             Modifier
@@ -509,29 +432,6 @@ fun OnboardingScreen(
               fontWeight = FontWeight.SemiBold,
             )
           }
-
-          // Secondary button: "Take a tour" -> Opens interactive hands-on canvas tour!
-          Box(
-            modifier =
-              Modifier
-                .fillMaxWidth()
-                .height(50.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(Color.White.copy(alpha = 0.12f))
-                .border(1.dp, Color.White.copy(alpha = 0.24f), RoundedCornerShape(14.dp))
-                .clickable {
-                  onTakeTour()
-                }
-                .testTag("onboarding_take_a_tour_button"),
-            contentAlignment = Alignment.Center,
-          ) {
-            Text(
-              text = "Take a tour",
-              color = Color.White,
-              fontSize = 15.sp,
-              fontWeight = FontWeight.Medium,
-            )
-          }
         }
       }
     }
@@ -549,22 +449,6 @@ fun ThankYouScreen(
 ) {
   var videoFailed by remember { mutableStateOf(false) }
   var pureVideoCinemaMode by remember { mutableStateOf(false) }
-  var tapCount by remember { mutableStateOf(0) }
-  var lastTapMs by remember { mutableStateOf(0L) }
-
-  fun handleScreenTap() {
-    val now = System.currentTimeMillis()
-    if (now - lastTapMs <= 550L) {
-      tapCount += 1
-    } else {
-      tapCount = 1
-    }
-    lastTapMs = now
-    if (tapCount >= 3) {
-      tapCount = 0
-      pureVideoCinemaMode = !pureVideoCinemaMode
-    }
-  }
 
   val infiniteTransition = rememberInfiniteTransition(label = "rainbowThankYouTransition")
   val rainbowPhase by infiniteTransition.animateFloat(
@@ -643,12 +527,6 @@ fun ThankYouScreen(
               ),
           ),
         )
-        .clickable(
-          interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
-          indication = null,
-        ) {
-          handleScreenTap()
-        }
         .testTag("thank_you_screen"),
   ) {
     if (!videoFailed) {
@@ -777,7 +655,7 @@ fun ThankYouScreen(
                 .padding(horizontal = 12.dp, vertical = 5.dp),
           ) {
             Text(
-              text = "🎬 Triple-tap or tap here for Pure Video View",
+              text = "🎬 Tap here for Pure Video View",
               color = Color(0xFF67C8EB),
               fontSize = 11.sp,
               fontWeight = FontWeight.SemiBold,
@@ -849,7 +727,7 @@ fun ThankYouScreen(
         horizontalArrangement = Arrangement.spacedBy(14.dp),
       ) {
         Text(
-          text = "🎬 Pure Cinema Reel (3x tap to show card)",
+          text = "🎬 Pure Cinema Reel (Tap to show card)",
           color = Color.White,
           fontSize = 12.sp,
           fontWeight = FontWeight.SemiBold,

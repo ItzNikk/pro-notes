@@ -163,6 +163,7 @@ enum class ActivePopover {
   NONE,
   PEN_SETTINGS,
   HIGHLIGHTER_SETTINGS,
+  TAPE_SETTINGS,
   PEN_COLOR,
   ERASER_SETTINGS,
   SHAPE_SETTINGS,
@@ -548,6 +549,20 @@ private fun interpolateClosedPolygon(vertices: List<Offset>, stepsPerEdge: Int):
   return result
 }
 
+enum class TapePattern(
+  val label: String,
+  val subtitle: String,
+  val badge: String,
+) {
+  SOLID("Classic Matte", "Solid opaque study masking tape", "Solid"),
+  DIAGONAL_STRIPE("Washi Candy Stripes", "Diagonal pastel study stripes", "Stripes"),
+  POLKA_DOT("Polka Dot Washi", "Playful dotted study masking tape", "Dots"),
+  GRID_WASHI("Graph Grid Washi", "Cross-hatch craft grid tape", "Grid"),
+  STARDUST("Stardust Sparkle", "Star & constellation recall tape", "Stars"),
+  GRADIENT_GLOW("Pastel Ombré", "Smooth dual-tone gradient tape", "Ombré"),
+  EXAM_CAUTION("Key Formula Chevron", "High-contrast exam recall tape", "Exam"),
+}
+
 data class StudyTapeItem(
   val id: String = java.util.UUID.randomUUID().toString(),
   val start: Offset,
@@ -555,6 +570,7 @@ data class StudyTapeItem(
   val color: Color = Color(0xFF3E8BF7),
   val thickness: Float = 38f,
   val isRevealed: Boolean = false,
+  val pattern: TapePattern = TapePattern.DIAGONAL_STRIPE,
 )
 
 data class CanvasTextBox(
@@ -600,9 +616,13 @@ data class CanvasImageItem(
 
 data class LassoFilterSettings(
   val includeHandwriting: Boolean = true,
+  val includeShapes: Boolean = true,
   val includeImages: Boolean = true,
   val includeTextBoxes: Boolean = true,
   val includeComments: Boolean = true,
+  val includeStudyTapes: Boolean = true,
+  val rectangularMarquee: Boolean = false,
+  val autoReturnToPenAfterMove: Boolean = false,
 )
 
 data class LassoClipboard(
@@ -611,6 +631,7 @@ data class LassoClipboard(
   val elements: List<CanvasElementItem> = emptyList(),
   val stickyNotes: List<StickyNoteItem> = emptyList(),
   val images: List<CanvasImageItem> = emptyList(),
+  val studyTapes: List<StudyTapeItem> = emptyList(),
   val originalCentroid: Offset = Offset.Zero,
 )
 
@@ -643,6 +664,7 @@ data class NotePage(
   val pageNumber: Int = 1,
   val isBookmarked: Boolean = false,
   val pdfPageBitmap: Bitmap? = null,
+  val pdfTextContent: String = "",
   val strokes: List<DrawnStroke> = emptyList(),
   val studyTapes: List<StudyTapeItem> = emptyList(),
   val textBoxes: List<CanvasTextBox> = emptyList(),
@@ -677,6 +699,9 @@ data class NotebookDocument(
   val title: String,
   val timestamp: String,
   val coverStyle: NotebookCoverStyle = NotebookCoverStyle.KRAFT_TAN,
+  val customCoverBitmap: Bitmap? = null,
+  val customCoverKey: String = "",
+  val coverAsFirstPage: Boolean = true,
   val isFavorite: Boolean = false,
   val isTrashed: Boolean = false,
   val hasStylusBadge: Boolean = false,

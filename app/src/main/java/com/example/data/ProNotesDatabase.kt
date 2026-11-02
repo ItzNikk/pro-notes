@@ -40,6 +40,7 @@ import com.example.model.ShapeKind
 import com.example.model.StickyNoteItem
 import com.example.model.StrokePattern
 import com.example.model.StudyTapeItem
+import com.example.model.TapePattern
 import java.io.File
 import java.io.FileOutputStream
 import java.security.KeyStore
@@ -549,10 +550,13 @@ class NotebookRepository(
   private fun cleanupBitmapsForNotebook(notebookId: String, activeKeys: Set<String>) {
     val pdfPrefix = "pdf_${notebookId}_"
     val imgPrefix = "img_${notebookId}_"
+    val coverPrefix = "cover_${notebookId}"
     bitmapDir.listFiles()?.forEach { file ->
       val nameWithoutExt = file.nameWithoutExtension
       if (
-        (nameWithoutExt.startsWith(pdfPrefix) || nameWithoutExt.startsWith(imgPrefix)) &&
+        (nameWithoutExt.startsWith(pdfPrefix) ||
+          nameWithoutExt.startsWith(imgPrefix) ||
+          nameWithoutExt.startsWith(coverPrefix)) &&
           !activeKeys.contains(nameWithoutExt)
       ) {
         file.delete()
@@ -562,6 +566,20 @@ class NotebookRepository(
 
   private fun toEntity(doc: NotebookDocument): NotebookEntity {
     val activeBitmapKeys = mutableSetOf<String>()
+    val savedCoverKey =
+      when {
+        doc.customCoverBitmap != null -> {
+          val key = doc.customCoverKey.ifBlank { "cover_${doc.id}" }
+          saveBitmapToDisk(key, doc.customCoverBitmap, forceOverwrite = true)
+          activeBitmapKeys.add(key)
+          key
+        }
+        doc.customCoverKey.isNotBlank() -> {
+          activeBitmapKeys.add(doc.customCoverKey)
+          doc.customCoverKey
+        }
+        else -> ""
+      }
     val pagesArr = JSONArray()
     doc.pages.forEachIndexed { pageIdx, page ->
       val pageObj = JSONObject()
@@ -596,6 +614,9 @@ class NotebookRepository(
         saveBitmapToDisk(pdfKey, page.pdfPageBitmap)
         activeBitmapKeys.add(pdfKey)
         pageObj.put("pdfBitmapKey", pdfKey)
+      }
+      if (page.pdfTextContent.isNotBlank()) {
+        pageObj.put("pdfTextContent", page.pdfTextContent)
       }
 
       val strokesArr = JSONArray()
@@ -651,6 +672,7 @@ class NotebookRepository(
         tObj.put("color", tape.color.toArgb())
         tObj.put("thickness", tape.thickness.toDouble())
         tObj.put("isRevealed", tape.isRevealed)
+        tObj.put("pattern", tape.pattern.name)
         tapesArr.put(tObj)
       }
       pageObj.put("studyTapes", tapesArr)
@@ -734,7 +756,7 @@ class NotebookRepository(
       hasStylusBadge = doc.hasStylusBadge,
       isImportedPdf = doc.isImportedPdf,
       paperTemplateName =
-        "${doc.paperTemplate.name}|${doc.paperColorTheme.name}|${doc.isLockedVault}|${doc.vaultPinHash}",
+        "${doc.paperTemplate.name}|${doc.paperColorTheme.name}|${doc.isLockedVault}|${doc.vaultPinHash}|$savedCoverKey|${doc.coverAsFirstPage}",
       currentPageIndex = doc.currentPageIndex,
       pagesJson = storedPagesPayload,
       updatedAtEpochMs = doc.updatedAtEpochMs,
@@ -761,6 +783,10 @@ class NotebookRepository(
         .getOrDefault(PaperColorTheme.PURE_WHITE)
     val isLocked = templateTokens.getOrElse(2) { "false" }.toBoolean() || entity.isEncrypted
     val pinHash = templateTokens.getOrElse(3) { "" }
+    val customCoverKey = templateTokens.getOrElse(4) { "" }
+    val customCoverBitmap =
+      if (customCoverKey.isNotBlank()) loadBitmapFromDisk(customCoverKey) else null
+    val coverAsFirstPage = templateTokens.getOrElse(5) { "true" }.toBoolean()
 
     val docType =
       runCatching { DocumentType.valueOf(entity.documentTypeName) }
@@ -810,6 +836,7 @@ class NotebookRepository(
 
         val pdfKey = pageObj.optString("pdfBitmapKey", "")
         val pdfBitmap = if (pdfKey.isNotEmpty()) loadBitmapFromDisk(pdfKey) else null
+        val pdfTextContent = pageObj.optString("pdfTextContent", "")
 
         val strokes = mutableListOf<DrawnStroke>()
         val strokesArr = pageObj.optJSONArray("strokes") ?: JSONArray()
@@ -878,6 +905,10 @@ class NotebookRepository(
         val tapesArr = pageObj.optJSONArray("studyTapes") ?: JSONArray()
         for (t in 0 until tapesArr.length()) {
           val tObj = tapesArr.getJSONObject(t)
+          val patternStr = tObj.optString("pattern", TapePattern.DIAGONAL_STRIPE.name)
+          val parsedTapePattern =
+            runCatching { TapePattern.valueOf(patternStr) }
+              .getOrDefault(TapePattern.DIAGONAL_STRIPE)
           studyTapes.add(
             StudyTapeItem(
               id = tObj.optString("id", java.util.UUID.randomUUID().toString()),
@@ -888,6 +919,7 @@ class NotebookRepository(
               color = Color(tObj.optInt("color", 0xFF3E8BF7.toInt())),
               thickness = tObj.optDouble("thickness", 38.0).toFloat(),
               isRevealed = tObj.optBoolean("isRevealed", false),
+              pattern = parsedTapePattern,
             )
           )
         }
@@ -981,6 +1013,7 @@ class NotebookRepository(
             pageNumber = pageNum,
             isBookmarked = isBookmarked,
             pdfPageBitmap = pdfBitmap,
+            pdfTextContent = pdfTextContent,
             strokes = strokes,
             studyTapes = studyTapes,
             textBoxes = textBoxes,
@@ -1007,6 +1040,9 @@ class NotebookRepository(
       title = entity.title,
       timestamp = entity.timestamp,
       coverStyle = cover,
+      customCoverBitmap = customCoverBitmap,
+      customCoverKey = customCoverKey,
+      coverAsFirstPage = coverAsFirstPage,
       isFavorite = entity.isFavorite,
       isTrashed = entity.isTrashed,
       hasStylusBadge = entity.hasStylusBadge,

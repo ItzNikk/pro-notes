@@ -169,7 +169,7 @@ fun DocumentsScreen(
   stylusQuickSwatches: List<Color> = emptyList(),
   stylusCustomPalette: List<Color> = emptyList(),
   onAddCustomColorToStylusPalette: (Color) -> Unit = {},
-  onOpenVideoShowcase: () -> Unit = {},
+  onImportCustomCoverForNotebook: (String) -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val colors = LocalProNotesColors.current
@@ -181,10 +181,6 @@ fun DocumentsScreen(
   var renameTarget by remember { mutableStateOf<Pair<Boolean, String>?>(null) } // (isFolder, id)
   var renameInitialTitle by remember { mutableStateOf("") }
   var moveTarget by remember { mutableStateOf<Pair<Boolean, String>?>(null) } // (isFolder, id)
-
-  // Triple-tap (3x tap) tracker on header title / logo to launch video showcase
-  var headerTapCount by remember { mutableIntStateOf(0) }
-  var lastHeaderTapMs by remember { mutableStateOf(0L) }
 
   // Interactive Drag-and-Drop state for dragging Notebooks into Folders and Folders into Folders
   var activeDragItem by remember { mutableStateOf<Pair<Boolean, String>?>(null) } // (isFolder, id)
@@ -242,7 +238,14 @@ fun DocumentsScreen(
               notebooks.any { nb ->
                 !nb.isTrashed &&
                   nb.folderId == folder.id &&
-                  nb.title.contains(trimmedQuery, ignoreCase = true)
+                  (nb.title.contains(trimmedQuery, ignoreCase = true) ||
+                    nb.pages.any { page ->
+                      page.pdfTextContent.contains(trimmedQuery, ignoreCase = true) ||
+                        page.textBoxes.any { tb -> tb.text.contains(trimmedQuery, ignoreCase = true) } ||
+                        page.stickyNotes.any { st -> st.text.contains(trimmedQuery, ignoreCase = true) } ||
+                        page.elements.any { el -> el.stampType.badgeText.contains(trimmedQuery, ignoreCase = true) } ||
+                        page.studyTapes.any { tp -> tp.pattern.label.contains(trimmedQuery, ignoreCase = true) }
+                    })
               }
             folderMatches || hasMatchingChildNotebook
           }
@@ -287,11 +290,19 @@ fun DocumentsScreen(
               parentFolder != null &&
                 !parentFolder.isTrashed &&
                 parentFolder.name.contains(trimmedQuery, ignoreCase = true)
+            val docTypeMatches =
+              (doc.isImportedPdf && "pdf".contains(trimmedQuery, ignoreCase = true)) ||
+                (doc.documentType == DocumentType.WHITEBOARD && "whiteboard".contains(trimmedQuery, ignoreCase = true))
             doc.title.contains(trimmedQuery, ignoreCase = true) ||
               parentFolderMatches ||
+              docTypeMatches ||
               doc.pages.any { page ->
-                page.textBoxes.any { tb -> tb.text.contains(trimmedQuery, ignoreCase = true) } ||
-                  page.stickyNotes.any { st -> st.text.contains(trimmedQuery, ignoreCase = true) }
+                page.pdfTextContent.contains(trimmedQuery, ignoreCase = true) ||
+                  page.textBoxes.any { tb -> tb.text.contains(trimmedQuery, ignoreCase = true) } ||
+                  page.stickyNotes.any { st -> st.text.contains(trimmedQuery, ignoreCase = true) } ||
+                  page.elements.any { el -> el.stampType.badgeText.contains(trimmedQuery, ignoreCase = true) } ||
+                  page.studyTapes.any { tp -> tp.pattern.label.contains(trimmedQuery, ignoreCase = true) } ||
+                  "page ${page.pageNumber}".contains(trimmedQuery, ignoreCase = true)
               }
           }
         }
@@ -407,20 +418,6 @@ fun DocumentsScreen(
             color = colors.textPrimary,
             fontSize = if (isCompact) 22.sp else 26.sp,
             fontWeight = FontWeight.Bold,
-            modifier =
-              Modifier.clickable {
-                val now = System.currentTimeMillis()
-                if (now - lastHeaderTapMs <= 480L) {
-                  headerTapCount += 1
-                } else {
-                  headerTapCount = 1
-                }
-                lastHeaderTapMs = now
-                if (headerTapCount >= 3) {
-                  headerTapCount = 0
-                  onOpenVideoShowcase()
-                }
-              },
           )
 
           Row(
@@ -449,7 +446,7 @@ fun DocumentsScreen(
               Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
                 if (searchQuery.isEmpty()) {
                   Text(
-                    text = "Search notes & folders...",
+                    text = "Search notes, PDFs & folders...",
                     color = colors.textSecondary,
                     fontSize = 12.5.sp,
                     maxLines = 1,
@@ -860,18 +857,7 @@ fun DocumentsScreen(
             verticalArrangement = Arrangement.spacedBy(22.dp),
             modifier = Modifier.fillMaxSize(),
           ) {
-            // 1. "+ New..." Dashed Creation Card in Documents Root or Folder (hidden while actively filtering)
-            if (selectedSection == DocumentsSidebarSection.DOCUMENTS && searchQuery.isBlank()) {
-              item(key = "new_notebook_card") {
-                Box {
-                  NewNotebookDashedCard(
-                    onClick = { showNewCreationMenu = true },
-                  )
-                }
-              }
-            }
-
-            // 2. Folder Cards
+            // 1. Folder Cards FIRST (Folders always appear before everything else!)
             items(visibleFolders, key = { "folder_${it.id}" }) { folder ->
               val matchingNotebooksInFolder =
                 if (searchQuery.isBlank()) {
@@ -882,7 +868,12 @@ fun DocumentsScreen(
                     !it.isTrashed &&
                       it.folderId == folder.id &&
                       (it.title.contains(q, ignoreCase = true) ||
-                        folder.name.contains(q, ignoreCase = true))
+                        folder.name.contains(q, ignoreCase = true) ||
+                        it.pages.any { p ->
+                          p.pdfTextContent.contains(q, ignoreCase = true) ||
+                            p.textBoxes.any { tb -> tb.text.contains(q, ignoreCase = true) } ||
+                            p.stickyNotes.any { st -> st.text.contains(q, ignoreCase = true) }
+                        })
                   }
                 }
               val childCount =
@@ -937,6 +928,17 @@ fun DocumentsScreen(
               )
             }
 
+            // 2. "+ New..." Dashed Creation Card in Documents Root or Folder (hidden while actively filtering)
+            if (selectedSection == DocumentsSidebarSection.DOCUMENTS && searchQuery.isBlank()) {
+              item(key = "new_notebook_card") {
+                Box {
+                  NewNotebookDashedCard(
+                    onClick = { showNewCreationMenu = true },
+                  )
+                }
+              }
+            }
+
             // 3. Notebook & Whiteboard Cards
             items(filteredNotebooks, key = { it.id }) { doc ->
               val parentFolderName =
@@ -970,6 +972,9 @@ fun DocumentsScreen(
                 },
                 onMoveToFolder = {
                   moveTarget = false to doc.id
+                },
+                onImportCustomCover = {
+                  onImportCustomCoverForNotebook(doc.id)
                 },
                 onToggleFavorite = { onToggleFavorite(doc.id) },
                 onMoveToTrash = { onMoveToTrash(doc.id) },
@@ -1702,6 +1707,7 @@ private fun NotebookGridCard(
   onClick: () -> Unit,
   onRename: () -> Unit,
   onMoveToFolder: () -> Unit,
+  onImportCustomCover: () -> Unit = {},
   onToggleFavorite: () -> Unit,
   onMoveToTrash: () -> Unit,
   onRestoreFromTrash: () -> Unit,
@@ -1758,9 +1764,31 @@ private fun NotebookGridCard(
       val firstPdfBitmap =
         if (document.isLockedVault) null
         else document.pages.firstOrNull()?.pdfPageBitmap
+      val customCoverBmp =
+        if (document.isLockedVault) null
+        else document.customCoverBitmap
 
       if (document.isLockedVault) {
         VaultLockedCoverArtwork()
+      } else if (customCoverBmp != null) {
+        Image(
+          bitmap = customCoverBmp.asImageBitmap(),
+          contentDescription = document.title,
+          contentScale = ContentScale.Crop,
+          modifier = Modifier.fillMaxSize().background(Color(0xFF1E222A)),
+        )
+        // Book spine shadow overlay on custom cover
+        Box(
+          modifier =
+            Modifier
+              .fillMaxHeight()
+              .width(12.dp)
+              .background(
+                Brush.horizontalGradient(
+                  colors = listOf(Color.Black.copy(alpha = 0.36f), Color.Transparent)
+                )
+              )
+        )
       } else if (firstPdfBitmap != null) {
         Image(
           bitmap = firstPdfBitmap.asImageBitmap(),
@@ -1786,6 +1814,32 @@ private fun NotebookGridCard(
         }
       } else {
         NotebookCoverArtwork(coverStyle = document.coverStyle)
+      }
+
+      // Render Page 1's handwritten strokes directly on the cover preview when coverAsFirstPage is active!
+      val firstPage = document.pages.firstOrNull()
+      if (!document.isLockedVault && document.coverAsFirstPage && firstPage != null && firstPage.strokes.isNotEmpty()) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+          val srcW = firstPage.canvasWidthPx.coerceAtLeast(600f)
+          val srcH = firstPage.canvasHeightPx.coerceAtLeast(800f)
+          val sx = size.width / srcW
+          val sy = size.height / srcH
+          firstPage.strokes.forEach { stroke ->
+            if (stroke.points.size >= 2) {
+              val path = Path().apply {
+                moveTo(stroke.points.first().x * sx, stroke.points.first().y * sy)
+                for (i in 1 until stroke.points.size) {
+                  lineTo(stroke.points[i].x * sx, stroke.points[i].y * sy)
+                }
+              }
+              drawPath(
+                path = path,
+                color = stroke.color,
+                style = Stroke(width = (stroke.strokeWidth * sx).coerceIn(1.2f, 6f), cap = StrokeCap.Round),
+              )
+            }
+          }
+        }
       }
 
       if (document.documentType == DocumentType.WHITEBOARD && !document.isLockedVault) {
@@ -1867,6 +1921,20 @@ private fun NotebookGridCard(
               onClick = {
                 showCardMenu = false
                 onMoveToFolder()
+              },
+            )
+            DropdownMenuItem(
+              text = { Text("Import Custom Cover...", color = Color(0xFF67C8EB), fontSize = 13.sp) },
+              leadingIcon = {
+                Icon(
+                  Icons.Outlined.MenuBook,
+                  contentDescription = null,
+                  tint = Color(0xFF67C8EB),
+                )
+              },
+              onClick = {
+                showCardMenu = false
+                onImportCustomCover()
               },
             )
             DropdownMenuItem(

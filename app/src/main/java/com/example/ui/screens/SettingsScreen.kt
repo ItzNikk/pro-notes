@@ -136,7 +136,6 @@ fun SettingsScreen(
   onToggleStylusTailEraser: (Boolean) -> Unit = {},
   onUpdateDeveloperUpiInfo: (String, String) -> Unit = { _, _ -> },
   onOpenThankYouScreen: () -> Unit = {},
-  onStartInteractiveTour: () -> Unit = {},
   onEmptyTrash: () -> Unit,
   onResetAllDataToDefaults: () -> Unit,
   onNavigateBack: () -> Unit,
@@ -755,44 +754,10 @@ fun SettingsScreen(
                       }
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
                     SettingsDivider()
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    // Interactive Hands-On Feature Tour Launcher (Available to all users)
-                    Text(
-                      text = "Interactive Hands-On Tour",
-                      color = colors.textPrimary,
-                      fontSize = 15.sp,
-                      fontWeight = FontWeight.SemiBold,
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                      text = "Jump into the live canvas and try Stylus Ink, Shapes Studio, Circle-to-Lasso, Color Laser, and Eraser step-by-step.",
-                      color = colors.textSecondary,
-                      fontSize = 12.5.sp,
-                      lineHeight = 18.sp,
-                    )
-                    Spacer(modifier = Modifier.height(10.dp))
-                    Box(
-                      modifier = Modifier
-                        .fillMaxWidth()
-                        .height(44.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(SwitchBlue)
-                        .clickable(onClick = onStartInteractiveTour)
-                        .testTag("settings_start_interactive_tour_button"),
-                      contentAlignment = Alignment.Center,
-                    ) {
-                      Text(
-                        text = "Take Interactive Feature Tour",
-                        color = Color.White,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
-                      )
-                    }
-
-                    Spacer(modifier = Modifier.height(10.dp))
                     Box(
                       modifier = Modifier
                         .fillMaxWidth()
@@ -818,26 +783,14 @@ fun SettingsScreen(
         }
       }
 
-      // Small muted footer (Triple-tap to launch Video Showcase)
-      var footerTapCount by remember { mutableStateOf(0) }
-      var footerLastTapMs by remember { mutableStateOf(0L) }
       Text(
-        text = "Pro Notes · Founded by ItzNikk · Play Store Release Edition (3x Tap for Video Reel)",
+        text = "Pro Notes · Founded by ItzNikk · Play Store Release Edition",
         color = colors.textMuted,
         fontSize = 12.sp,
         fontWeight = FontWeight.Normal,
         textAlign = TextAlign.Center,
         modifier = Modifier
           .fillMaxWidth()
-          .clickable {
-            val now = System.currentTimeMillis()
-            footerTapCount = if (now - footerLastTapMs <= 550L) footerTapCount + 1 else 1
-            footerLastTapMs = now
-            if (footerTapCount >= 3) {
-              footerTapCount = 0
-              onOpenThankYouScreen()
-            }
-          }
           .padding(top = 18.dp, bottom = 2.dp),
       )
     }

@@ -56,6 +56,7 @@ object PdfImportHelper {
           }
         } ?: return@withContext null
 
+        val extractedPerPageText = extractTextFromPdfFile(tempFile)
         val pfd =
           android.os.ParcelFileDescriptor.open(
             tempFile,
@@ -81,11 +82,15 @@ object PdfImportHelper {
                 null,
                 PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY,
               )
+              val pageText =
+                extractedPerPageText.getOrNull(i)?.ifBlank { "$displayName Page ${i + 1}" }
+                  ?: "$displayName Page ${i + 1}"
               pages.add(
                 NotePage(
                   pageNumber = i + 1,
                   isBookmarked = false,
                   pdfPageBitmap = bitmap,
+                  pdfTextContent = pageText,
                 )
               )
             }
@@ -330,13 +335,58 @@ object PdfImportHelper {
             val canvas = Canvas(bmp)
             canvas.drawColor(android.graphics.Color.WHITE)
             p.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
-            renderedPages.add(NotePage(pageNumber = i + 1, pdfPageBitmap = bmp))
+            val topic = slideTopics.getOrNull(i)
+            val searchableSlideText =
+              if (topic != null) {
+                "${topic.first}\n${topic.second}\n${topic.third.joinToString("\n")}"
+              } else {
+                "Slide ${i + 1}"
+              }
+            renderedPages.add(
+              NotePage(
+                pageNumber = i + 1,
+                pdfPageBitmap = bmp,
+                pdfTextContent = searchableSlideText,
+              )
+            )
           }
         }
       }
       sampleFile.delete()
       "Macroeconomics Lecture PDF" to renderedPages
     }
+
+  /**
+   * Lightweight PDF stream text extractor that parses literal PDF text strings `( ... )` and
+   * FlateDecode/uncompressed text blocks so imported PDFs are searchable by keyword on-device.
+   */
+  private fun extractTextFromPdfFile(pdfFile: File): List<String> {
+    return runCatching {
+      val bytes = pdfFile.readBytes()
+      val rawLatin = String(bytes, Charsets.ISO_8859_1)
+      val pageChunks = rawLatin.split("/Type /Page", "/Type/Page").drop(1)
+      val literalRegex = Regex("\\(([^()\\\\]{2,120})\\)")
+      if (pageChunks.isNotEmpty()) {
+        pageChunks.map { chunk ->
+          literalRegex
+            .findAll(chunk)
+            .map { it.groupValues[1] }
+            .filter { token -> token.any { ch -> ch.isLetterOrDigit() } }
+            .joinToString(" ")
+            .take(1500)
+        }
+      } else {
+        val allTokens =
+          literalRegex
+            .findAll(rawLatin)
+            .map { it.groupValues[1] }
+            .filter { token -> token.any { ch -> ch.isLetterOrDigit() } }
+            .joinToString(" ")
+            .take(2000)
+        listOf(allTokens)
+      }
+    }.getOrDefault(emptyList())
+  }
 
   /**
    * Computes a SHA-256 fingerprint for Vault PIN verification and PDF watermarks.
@@ -481,13 +531,21 @@ object PdfImportHelper {
     val activeColorTheme = notePage.resolvedColorTheme(document.paperColorTheme)
     val activeTemplate = notePage.resolvedTemplate(document.paperTemplate)
 
-    // 1. Paper Background Color or Imported PDF Page or Custom Template Bitmap
+    // 1. Paper Background Color or Imported PDF Page or Custom Cover on Page 1 or Custom Template Bitmap
     canvas.drawColor(activeColorTheme.color.toArgb())
     val pdfBmp = notePage.pdfPageBitmap
     val customBmp = notePage.customTemplateBitmap
+    val isFirstPageCover =
+      notePage.pageNumber == 1 &&
+        document.coverAsFirstPage &&
+        !document.isImportedPdf &&
+        document.documentType != com.example.model.DocumentType.WHITEBOARD
     if (pdfBmp != null) {
       val destRect = Rect(0, 0, width, height)
       canvas.drawBitmap(pdfBmp, null, destRect, null)
+    } else if (isFirstPageCover && document.customCoverBitmap != null) {
+      val destRect = Rect(0, 0, width, height)
+      canvas.drawBitmap(document.customCoverBitmap, null, destRect, null)
     } else if (activeTemplate == PaperTemplate.CUSTOM && customBmp != null) {
       val destRect = Rect(0, 0, width, height)
       canvas.drawBitmap(customBmp, null, destRect, null)

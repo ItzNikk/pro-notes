@@ -152,6 +152,7 @@ import com.example.model.PenStyle
 import com.example.model.PrimaryTool
 import com.example.model.ShapeKind
 import com.example.model.StrokePattern
+import com.example.model.TapePattern
 import com.example.model.ToolbarDockPosition
 import com.example.model.WritingSubTool
 import com.example.model.isClosedCircleLoop
@@ -173,6 +174,7 @@ import com.example.ui.components.RedoCurvedArrowIcon
 import com.example.ui.components.ShapeSettingsPopover
 import com.example.ui.components.SidebarThumbnailsIcon
 import com.example.ui.components.StrokePatternIcon
+import com.example.ui.components.TapeSettingsPopover
 import com.example.ui.components.TemplatePreviewCanvas
 import com.example.ui.components.TimeKeeperPopover
 import com.example.ui.components.ToolbarCustomizationPopover
@@ -182,7 +184,6 @@ import com.example.ui.components.WritingSubToolCustomIcon
 import com.example.ui.components.ZoomWindowPanel
 import com.example.ui.components.InteractiveRulerOverlay
 import com.example.ui.components.drawPaperTemplateLines
-import androidx.compose.ui.viewinterop.AndroidView
 import com.example.R
 import com.example.ui.theme.ActiveToolIconDark
 import com.example.ui.theme.ActiveToolPill
@@ -225,6 +226,7 @@ fun EditorScreen(
   onImportPdfFromDevice: () -> Unit,
   onImportImageFromDevice: () -> Unit,
   onImportCustomTemplateFromDevice: () -> Unit = {},
+  onImportCustomCoverFromDevice: () -> Unit = {},
   onExportFullPdf: () -> Unit,
   onExportCurrentPagePng: () -> Unit,
   modifier: Modifier = Modifier,
@@ -413,9 +415,8 @@ fun EditorScreen(
   var isDrawingSnappedHold by remember { mutableStateOf(false) }
   var circleLassoHoldProgress by remember { mutableFloatStateOf(0f) }
   var circleLassoHoldCenter by remember { mutableStateOf(Offset.Zero) }
-  var canvasTripleTapCount by remember { mutableIntStateOf(0) }
-  var canvasLastTapTimeMs by remember { mutableLongStateOf(0L) }
-  var canvasLastTapPos by remember { mutableStateOf(Offset.Zero) }
+  var showDocumentSearchBar by remember { mutableStateOf(false) }
+  var editorSearchQuery by remember { mutableStateOf("") }
 
   // Erase feedback: cursor ring, ripples where ink was removed, and ink that fades out.
   // eraserActive flips twice per gesture; the cursor position is only read while drawing.
@@ -476,7 +477,6 @@ fun EditorScreen(
         onTabClose = onCloseTab,
         onNewTabClick = onAddNewNotebookTab,
         onToggleReadOnly = onToggleReadOnlyMode,
-        onTripleTapShowcase = viewModel::openThankYouScreen,
       )
 
       // 2. DOCKED MAIN WORKSPACE TOOLBAR (Always docked at top — never overlaps zoomed PDFs)
@@ -508,6 +508,7 @@ fun EditorScreen(
             }
           },
           onTogglePageSidebar = onTogglePageSidebar,
+          onToggleDocumentSearch = { showDocumentSearchBar = !showDocumentSearchBar },
           onToggleBookmark = onTogglePageBookmark,
           onToggleZoomWindow = onToggleZoomWindow,
           onOpenTimeKeeper = { onTogglePopover(ActivePopover.TIME_KEEPER) },
@@ -520,8 +521,115 @@ fun EditorScreen(
           onClearPageStrokes = onClearPageStrokes,
           onToggleOnlyDrawWithStylus = { onToggleOnlyDrawWithStylus(!onlyDrawWithStylus) },
           onOpenSettings = onOpenSettings,
-          onStartInteractiveTour = { viewModel.startInteractiveTour() },
         )
+      }
+
+      // 2b. IN-EDITOR DOCUMENT & PDF SEARCH BAR (Searches PDF text, text boxes, sticky notes, stamps, study tapes across pages)
+      if (showDocumentSearchBar && activeDocument != null) {
+        val searchTrimmed = editorSearchQuery.trim()
+        val matchingPageIndices =
+          remember(activeDocument.pages, searchTrimmed) {
+            if (searchTrimmed.isEmpty()) emptyList()
+            else {
+              activeDocument.pages.mapIndexedNotNull { idx, p ->
+                val matches =
+                  p.pdfTextContent.contains(searchTrimmed, ignoreCase = true) ||
+                    p.textBoxes.any { it.text.contains(searchTrimmed, ignoreCase = true) } ||
+                    p.stickyNotes.any { it.text.contains(searchTrimmed, ignoreCase = true) } ||
+                    p.elements.any { it.stampType.badgeText.contains(searchTrimmed, ignoreCase = true) } ||
+                    p.studyTapes.any { it.pattern.label.contains(searchTrimmed, ignoreCase = true) } ||
+                    "page ${idx + 1}".contains(searchTrimmed, ignoreCase = true)
+                if (matches) idx else null
+              }
+            }
+          }
+        Row(
+          modifier =
+            Modifier
+              .fillMaxWidth()
+              .background(Color(0xFF171A22))
+              .border(0.5.dp, SubToolbarBorder)
+              .padding(horizontal = 12.dp, vertical = 6.dp)
+              .testTag("editor_in_document_search_bar"),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          Icon(
+            imageVector = Icons.Outlined.Search,
+            contentDescription = null,
+            tint = Color(0xFF67C8EB),
+            modifier = Modifier.size(16.dp),
+          )
+          Box(
+            modifier =
+              Modifier
+                .weight(1f)
+                .height(30.dp)
+                .clip(RoundedCornerShape(8.dp))
+                .background(Color(0xFF232733))
+                .padding(horizontal = 10.dp),
+            contentAlignment = Alignment.CenterStart,
+          ) {
+            if (editorSearchQuery.isEmpty()) {
+              Text(
+                text = "Search inside PDF text, notes, sticky notes, or page #...",
+                color = TextSecondaryGray,
+                fontSize = 11.5.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+              )
+            }
+            BasicTextField(
+              value = editorSearchQuery,
+              onValueChange = { editorSearchQuery = it },
+              singleLine = true,
+              textStyle = TextStyle(color = Color.White, fontSize = 12.sp),
+              modifier = Modifier.fillMaxWidth().testTag("editor_search_input"),
+            )
+          }
+          if (searchTrimmed.isNotEmpty()) {
+            Text(
+              text =
+                if (matchingPageIndices.isEmpty()) "0 pages"
+                else "${matchingPageIndices.size} page(s)",
+              color = if (matchingPageIndices.isEmpty()) DangerRed else Color(0xFF67C8EB),
+              fontSize = 11.sp,
+              fontWeight = FontWeight.Bold,
+            )
+            matchingPageIndices.take(5).forEach { matchIdx ->
+              Box(
+                modifier =
+                  Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(
+                      if (matchIdx == activeDocument.currentPageIndex) SwitchBlue
+                      else Color(0xFF2A3040)
+                    )
+                    .clickable { onSelectPageIndex(matchIdx) }
+                    .padding(horizontal = 7.dp, vertical = 4.dp),
+              ) {
+                Text(
+                  text = "P.${matchIdx + 1}",
+                  color = Color.White,
+                  fontSize = 10.5.sp,
+                  fontWeight = FontWeight.Bold,
+                )
+              }
+            }
+          }
+          Icon(
+            imageVector = Icons.Default.Close,
+            contentDescription = "Close Search",
+            tint = TextSecondaryGray,
+            modifier =
+              Modifier
+                .size(18.dp)
+                .clickable {
+                  editorSearchQuery = ""
+                  showDocumentSearchBar = false
+                },
+          )
+        }
       }
 
       // 3. DOCKED CONTEXTUAL SECONDARY TOOL STRIP (Pen styles, thicknesses, color swatches, or exclusive Laser color bar)
@@ -538,9 +646,11 @@ fun EditorScreen(
           selectedSwatchIndex = selectedSwatchIndex,
           selectedColor = selectedColor,
           barrelRollDegrees = totalBarrelRollDeg,
+          isRulerVisible = uiState.rulerState.isVisible,
           isPenPopoverOpen =
             activePopover == ActivePopover.PEN_SETTINGS ||
-              activePopover == ActivePopover.HIGHLIGHTER_SETTINGS,
+              activePopover == ActivePopover.HIGHLIGHTER_SETTINGS ||
+              activePopover == ActivePopover.TAPE_SETTINGS,
           isColorPopoverOpen = activePopover == ActivePopover.PEN_COLOR,
           isEyedropperActive = isEyedropperActive,
           onSelectWritingSubTool = onSelectWritingSubTool,
@@ -717,14 +827,42 @@ fun EditorScreen(
                 val boundsState = rememberUpdatedState(lassoBounds)
                 val loopState = rememberUpdatedState(lassoLoopPoints)
 
-                // 1) Custom Template Background Bitmap (if template == CUSTOM)
-                pageData.customTemplateBitmap?.let { tmplBmp ->
-                  Image(
-                    bitmap = tmplBmp.asImageBitmap(),
-                    contentDescription = "Custom Template Background",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize(),
-                  )
+                // 0) Notebook Cover as Page 1 Background (Users can write & draw directly on the cover page!)
+                val isCoverFirstPage =
+                  pageIndex == 0 &&
+                    activeDocument != null &&
+                    activeDocument.coverAsFirstPage &&
+                    !activeDocument.isImportedPdf &&
+                    !isWhiteboard &&
+                    pageData.pdfPageBitmap == null
+                if (isCoverFirstPage && activeDocument != null) {
+                  val customCoverBmp = activeDocument.customCoverBitmap
+                  if (customCoverBmp != null) {
+                    Image(
+                      bitmap = customCoverBmp.asImageBitmap(),
+                      contentDescription = "Custom Notebook Cover Page 1",
+                      contentScale = ContentScale.Crop,
+                      modifier = Modifier.fillMaxSize(),
+                    )
+                  } else {
+                    FullPageNotebookCoverBackground(
+                      coverStyle = activeDocument.coverStyle,
+                      title = activeDocument.title,
+                      modifier = Modifier.fillMaxSize(),
+                    )
+                  }
+                }
+
+                // 1) Custom Template Background Bitmap (if template == CUSTOM and not overridden by cover)
+                if (!isCoverFirstPage) {
+                  pageData.customTemplateBitmap?.let { tmplBmp ->
+                    Image(
+                      bitmap = tmplBmp.asImageBitmap(),
+                      contentDescription = "Custom Template Background",
+                      contentScale = ContentScale.Fit,
+                      modifier = Modifier.fillMaxSize(),
+                    )
+                  }
                 }
 
                 // 2) Imported PDF Page Background Bitmap
@@ -1272,7 +1410,12 @@ fun EditorScreen(
                                 val constrainedPos =
                                   when {
                                     uiState.rulerState.isVisible && !isExplicitShapeTool ->
-                                      snapPointAlongRuler(startPoint, rawPos, uiState.rulerState.angleDegrees)
+                                      snapPointAlongRuler(
+                                        start = startPoint,
+                                        current = rawPos,
+                                        rulerPosition = uiState.rulerState.centerOffset,
+                                        angleDegrees = uiState.rulerState.angleDegrees,
+                                      )
                                     isHighlighterSub && currentHighlighterStraight ->
                                       Offset(rawPos.x, startPoint.y)
                                     else -> rawPos
@@ -1563,24 +1706,20 @@ fun EditorScreen(
                                 if (tappedStudyTape != null) {
                                   viewModel.toggleStudyTapeReveal(tappedStudyTape.id)
                                 } else if (totalDragDist < 14f && inProgressPoints.size <= 5) {
-                                  // Check for 3-times quick tap on the screen to launch Video Showcase!
-                                  val nowTapMs = System.currentTimeMillis()
-                                  if (
-                                    nowTapMs - canvasLastTapTimeMs <= 550L &&
-                                      (startPoint - canvasLastTapPos).getDistance() < 64f
-                                  ) {
-                                    canvasTripleTapCount += 1
-                                  } else {
-                                    canvasTripleTapCount = 1
-                                  }
-                                  canvasLastTapTimeMs = nowTapMs
-                                  canvasLastTapPos = startPoint
-                                  if (canvasTripleTapCount >= 3) {
-                                    canvasTripleTapCount = 0
-                                    viewModel.openThankYouScreen()
-                                  } else if (isExplicitShapeTool) {
+                                  if (isExplicitShapeTool) {
                                     // Tapping on an existing shape in Shape Mode selects it for vertex/move editing
                                     viewModel.selectShapeAtPoint(startPoint)
+                                  } else if (
+                                    currentPrimaryTool == PrimaryTool.WRITING_TOOLS &&
+                                      currentSubTool == WritingSubTool.TAPE
+                                  ) {
+                                    // Short tap with Tape tool places a neat 110px flashcard study tape strip
+                                    onAddStroke(
+                                      listOf(startPoint - Offset(55f, 0f), startPoint + Offset(55f, 0f)),
+                                      listOf(startPressure, startPressure),
+                                      false,
+                                      null,
+                                    )
                                   } else {
                                     if (inProgressPoints.size == 1) {
                                       inProgressPoints.add(startPoint + Offset(0.8f, 0.8f))
@@ -1594,7 +1733,6 @@ fun EditorScreen(
                                     )
                                   }
                                 } else {
-                                  canvasTripleTapCount = 0
                                   // Support single-tap stylus dots / periods
                                   if (inProgressPoints.size == 1) {
                                     inProgressPoints.add(startPoint + Offset(0.8f, 0.8f))
@@ -1621,8 +1759,8 @@ fun EditorScreen(
                     onUpdatePageCanvasSize(size.width, size.height)
                   }
 
-                  // Draw paper template lines if not a PDF page and not CUSTOM bitmap
-                  if (pageData.pdfPageBitmap == null && effectiveTemplate != PaperTemplate.CUSTOM) {
+                  // Draw paper template lines if not a PDF page, not CUSTOM bitmap, and not Page 1 Cover
+                  if (pageData.pdfPageBitmap == null && effectiveTemplate != PaperTemplate.CUSTOM && !isCoverFirstPage) {
                     drawPaperTemplateLines(
                       template = effectiveTemplate,
                       paperColorTheme = effectivePaperTheme,
@@ -1650,58 +1788,17 @@ fun EditorScreen(
                       )
                     }
 
-                  // Render Interactive Study Tapes (Tap to Reveal / Hide flashcards)
+                  // Render Interactive Study Tapes with Washi Patterns (Tap to Reveal / Hide flashcards)
                   pageData.studyTapes.forEach { tape ->
-                    val mid =
-                      Offset(
-                        (tape.start.x + tape.end.x) * 0.5f,
-                        (tape.start.y + tape.end.y) * 0.5f,
-                      )
-                    if (!tape.isRevealed) {
-                      drawLine(
-                        color = Color.Black.copy(alpha = 0.18f),
-                        start = tape.start,
-                        end = tape.end,
-                        strokeWidth = tape.thickness + 3f,
-                        cap = StrokeCap.Round,
-                      )
-                      drawLine(
-                        color = tape.color.copy(alpha = 0.95f),
-                        start = tape.start,
-                        end = tape.end,
-                        strokeWidth = tape.thickness,
-                        cap = StrokeCap.Round,
-                      )
-                      drawLine(
-                        color = Color.White.copy(alpha = 0.35f),
-                        start = tape.start,
-                        end = tape.end,
-                        strokeWidth = 2.5f,
-                        cap = StrokeCap.Round,
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f),
-                      )
-                      drawCircle(
-                        color = Color.White.copy(alpha = 0.88f),
-                        radius = 4.5f,
-                        center = mid,
-                      )
-                    } else {
-                      drawLine(
-                        color = tape.color.copy(alpha = 0.20f),
-                        start = tape.start,
-                        end = tape.end,
-                        strokeWidth = tape.thickness,
-                        cap = StrokeCap.Round,
-                      )
-                      drawLine(
-                        color = tape.color.copy(alpha = 0.65f),
-                        start = tape.start,
-                        end = tape.end,
-                        strokeWidth = 2.2f,
-                        cap = StrokeCap.Round,
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f),
-                      )
-                    }
+                    drawStudyTapeStrip(
+                      start = tape.start,
+                      end = tape.end,
+                      color = tape.color,
+                      thickness = tape.thickness,
+                      pattern = tape.pattern,
+                      isRevealed = tape.isRevealed,
+                      isSelectedByLasso = uiState.lassoSelectedTapeIds.contains(tape.id),
+                    )
                   }
 
                   // Laser Pointer Trails
@@ -1773,27 +1870,26 @@ fun EditorScreen(
                     val liveW =
                       when {
                         isHigh -> baseW * 3.4f
-                        isTape -> 38f
+                        isTape -> uiState.tapeThickness
                         isPencilTool -> baseW * 0.9f
                         else -> baseW
                       }
                     val liveColor =
                       when {
                         isHigh -> selectedColor.copy(alpha = 0.38f)
-                        isTape -> selectedColor.copy(alpha = 0.90f)
+                        isTape -> selectedColor.copy(alpha = 0.92f)
                         isPencilTool -> selectedColor.copy(alpha = 0.78f)
                         else -> selectedColor
                       }
                     if (isTape) {
-                      val linePath =
-                        Path().apply {
-                          moveTo(inProgressPoints.first().x, inProgressPoints.first().y)
-                          lineTo(inProgressPoints.last().x, inProgressPoints.last().y)
-                        }
-                      drawPath(
-                        path = linePath,
-                        color = liveColor,
-                        style = Stroke(width = liveW, cap = StrokeCap.Round, join = StrokeJoin.Round),
+                      drawStudyTapeStrip(
+                        start = inProgressPoints.first(),
+                        end = inProgressPoints.last(),
+                        color = selectedColor,
+                        thickness = uiState.tapeThickness,
+                        pattern = uiState.selectedTapePattern,
+                        isRevealed = false,
+                        isSelectedByLasso = false,
                       )
                     } else if (isDrawingSnappedHold && !isHigh) {
                       val previewPtsSnapshot = inProgressPoints.toList()
@@ -2739,6 +2835,19 @@ fun EditorScreen(
                   )
                 }
 
+                ActivePopover.TAPE_SETTINGS -> {
+                  TapeSettingsPopover(
+                    selectedPattern = uiState.selectedTapePattern,
+                    tapeThickness = uiState.tapeThickness,
+                    selectedColor = selectedColor,
+                    studyTapeCountOnPage = currentPage.studyTapes.size,
+                    onSelectPattern = viewModel::selectTapePattern,
+                    onThicknessChange = viewModel::updateTapeThickness,
+                    onRevealAllTapes = viewModel::revealAllStudyTapesOnPage,
+                    onCoverAllTapes = viewModel::hideAllStudyTapesOnPage,
+                  )
+                }
+
                 ActivePopover.ADD_PAGE_DIALOG -> {
                   AddPageAndTemplatePopover(
                     currentTemplate =
@@ -2749,6 +2858,8 @@ fun EditorScreen(
                         ?: PaperColorTheme.PURE_WHITE,
                     currentCoverStyle =
                       activeDocument?.coverStyle ?: com.example.model.NotebookCoverStyle.KRAFT_TAN,
+                    hasCustomCover = activeDocument?.customCoverBitmap != null,
+                    coverAsFirstPage = activeDocument?.coverAsFirstPage ?: true,
                     customTemplates = customTemplates,
                     canDeleteCurrentPage = (activeDocument?.pages?.size ?: 1) > 1,
                     onAddPageWithTemplate = { tmpl, theme, customTmpl, posMode ->
@@ -2761,6 +2872,15 @@ fun EditorScreen(
                     },
                     onUpdateNotebookCover = { newCover ->
                       viewModel.updateCurrentNotebookCover(newCover)
+                    },
+                    onImportCustomCover = {
+                      onImportCustomCoverFromDevice()
+                    },
+                    onClearCustomCover = {
+                      viewModel.clearCustomNotebookCover()
+                    },
+                    onToggleCoverAsFirstPage = { _ ->
+                      viewModel.toggleCurrentNotebookCoverAsFirstPage()
                     },
                     onDuplicateCurrentPage = {
                       onDuplicateCurrentPage()
@@ -2782,29 +2902,6 @@ fun EditorScreen(
                 else -> Unit
               }
             }
-          }
-
-          // Interactive Hands-On Feature Tour Coach Overlay
-          if (uiState.showInteractiveTour) {
-            InteractiveFeatureTourOverlay(
-              step = uiState.interactiveTourStep,
-              selectedStylusBrand = uiState.selectedStylusBrand,
-              strokeCount = currentPage.strokes.size,
-              shapeCount = currentPage.strokes.count { it.isShape },
-              showLassoSelection = showLassoSelection,
-              laserTrailCount = laserTrails.size + currentPage.studyTapes.size,
-              onSelectStylusBrand = viewModel::selectStylusBrand,
-              onJumpToStep = viewModel::jumpToInteractiveTourStep,
-              onRunAutoDemo = viewModel::runTourStepAutoDemo,
-              onOpenCinemaShowcase = viewModel::openThankYouScreen,
-              onPrevStep = viewModel::previousInteractiveTourStep,
-              onNextStep = viewModel::advanceInteractiveTourStep,
-              onDismiss = viewModel::dismissInteractiveTour,
-              modifier =
-                Modifier
-                  .align(Alignment.BottomCenter)
-                  .padding(bottom = 20.dp, start = 16.dp, end = 16.dp),
-            )
           }
 
           // Subtle Status Toast Banner
@@ -2872,6 +2969,7 @@ private fun DockedMainToolbar(
   onRedo: () -> Unit,
   onSelectPrimaryTool: (PrimaryTool) -> Unit,
   onTogglePageSidebar: () -> Unit,
+  onToggleDocumentSearch: () -> Unit = {},
   onToggleBookmark: () -> Unit,
   onToggleZoomWindow: () -> Unit,
   onOpenTimeKeeper: () -> Unit,
@@ -2884,7 +2982,6 @@ private fun DockedMainToolbar(
   onClearPageStrokes: () -> Unit,
   onToggleOnlyDrawWithStylus: () -> Unit,
   onOpenSettings: () -> Unit,
-  onStartInteractiveTour: () -> Unit = {},
 ) {
   Row(
     modifier =
@@ -2918,7 +3015,7 @@ private fun DockedMainToolbar(
             Modifier
               .size(36.dp)
               .clip(RoundedCornerShape(8.dp))
-              .clickable(onClick = onTogglePageSidebar)
+              .clickable(onClick = onToggleDocumentSearch)
               .testTag("toolbar_search_button"),
           contentAlignment = Alignment.Center,
         ) {
@@ -3214,23 +3311,6 @@ private fun DockedMainToolbar(
             },
           )
           DropdownMenuItem(
-            text = {
-              Text(
-                "Stylus Setup & Interactive Tour",
-                color = Color(0xFF67C8EB),
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-              )
-            },
-            leadingIcon = {
-              Icon(Icons.Outlined.Tune, contentDescription = null, tint = Color(0xFF67C8EB))
-            },
-            onClick = {
-              showMoreMenu = false
-              onStartInteractiveTour()
-            },
-          )
-          DropdownMenuItem(
             text = { Text("Clear Current Page", color = DangerRed, fontSize = 13.sp) },
             onClick = {
               showMoreMenu = false
@@ -3257,6 +3337,7 @@ private fun DockedContextualWritingStrip(
   selectedSwatchIndex: Int,
   selectedColor: Color,
   barrelRollDegrees: Float,
+  isRulerVisible: Boolean = false,
   isPenPopoverOpen: Boolean,
   isColorPopoverOpen: Boolean,
   isEyedropperActive: Boolean,
@@ -3310,12 +3391,16 @@ private fun DockedContextualWritingStrip(
           )
         }
       } else {
-        // Writing Sub-Tools (Pen, Pencil, Highlighter, Tape, Draw Shape)
+        // Writing Sub-Tools (Pen, Pencil, Highlighter, Tape, Draw Shape, Ruler)
         WritingSubTool.entries
           .filter { enabledWritingSubTools.contains(it) }
           .forEachIndexed { idx, subTool ->
             val isSelected =
-              primaryTool == PrimaryTool.WRITING_TOOLS && activeWritingSubTool == subTool
+              if (subTool == WritingSubTool.RULER) {
+                isRulerVisible
+              } else {
+                primaryTool == PrimaryTool.WRITING_TOOLS && activeWritingSubTool == subTool
+              }
             if (isSelected) {
               Row(
                 modifier =
@@ -3323,7 +3408,7 @@ private fun DockedContextualWritingStrip(
                     .height(34.dp)
                     .clip(RoundedCornerShape(8.dp))
                     .background(
-                      if (isPenPopoverOpen) SubToolbarActiveCyan.copy(alpha = 0.28f)
+                      if (isPenPopoverOpen && subTool != WritingSubTool.RULER) SubToolbarActiveCyan.copy(alpha = 0.28f)
                       else SubToolbarActiveTeal
                     )
                     .clickable { onSelectWritingSubTool(subTool) }
@@ -3341,12 +3426,14 @@ private fun DockedContextualWritingStrip(
                   modifier = Modifier.size(19.dp),
                   accentColor = selectedColor,
                 )
-                Icon(
-                  imageVector = Icons.Default.KeyboardArrowDown,
-                  contentDescription = subTool.label,
-                  tint = ToolbarIconLight,
-                  modifier = Modifier.size(14.dp),
-                )
+                if (subTool != WritingSubTool.RULER) {
+                  Icon(
+                    imageVector = Icons.Default.KeyboardArrowDown,
+                    contentDescription = subTool.label,
+                    tint = ToolbarIconLight,
+                    modifier = Modifier.size(14.dp),
+                  )
+                }
               }
             } else {
               Box(
@@ -3542,11 +3629,16 @@ private fun AddPageAndTemplatePopover(
   currentTemplate: PaperTemplate,
   currentColorTheme: PaperColorTheme,
   currentCoverStyle: com.example.model.NotebookCoverStyle,
+  hasCustomCover: Boolean = false,
+  coverAsFirstPage: Boolean = true,
   customTemplates: List<CustomPageTemplate>,
   canDeleteCurrentPage: Boolean,
   onAddPageWithTemplate: (PaperTemplate, PaperColorTheme, CustomPageTemplate?, Int) -> Unit,
   onApplyTemplateToCurrentPage: (PaperTemplate, PaperColorTheme, CustomPageTemplate?) -> Unit,
   onUpdateNotebookCover: (com.example.model.NotebookCoverStyle) -> Unit,
+  onImportCustomCover: () -> Unit = {},
+  onClearCustomCover: () -> Unit = {},
+  onToggleCoverAsFirstPage: (Boolean) -> Unit = {},
   onDuplicateCurrentPage: () -> Unit,
   onDeleteCurrentPage: () -> Unit,
   onImportCustomTemplate: () -> Unit,
@@ -3568,7 +3660,7 @@ private fun AddPageAndTemplatePopover(
   Column(
     modifier =
       Modifier
-        .widthIn(max = 410.dp)
+        .widthIn(max = 420.dp)
         .fillMaxWidth(0.94f)
         .shadow(20.dp, RoundedCornerShape(16.dp))
         .clip(RoundedCornerShape(16.dp))
@@ -3598,20 +3690,47 @@ private fun AddPageAndTemplatePopover(
 
     Spacer(modifier = Modifier.height(10.dp))
 
-    // Notebook Cover Option Selector
-    Text(
-      text = "NOTEBOOK COVER STYLE",
-      color = TextSecondaryGray,
-      fontSize = 10.sp,
-      fontWeight = FontWeight.SemiBold,
-    )
+    // Notebook Cover Option Selector + Import Custom Cover
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Text(
+        text = "NOTEBOOK COVER",
+        color = TextSecondaryGray,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.SemiBold,
+      )
+      Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (hasCustomCover) {
+          Text(
+            text = "Reset Custom Cover",
+            color = DangerRed,
+            fontSize = 10.5.sp,
+            fontWeight = FontWeight.SemiBold,
+            modifier = Modifier.clickable(onClick = onClearCustomCover),
+          )
+        }
+        Text(
+          text = "+ Import Custom Cover",
+          color = Color(0xFF67C8EB),
+          fontSize = 10.5.sp,
+          fontWeight = FontWeight.SemiBold,
+          modifier =
+            Modifier
+              .clickable(onClick = onImportCustomCover)
+              .testTag("import_custom_cover_button"),
+        )
+      }
+    }
     Spacer(modifier = Modifier.height(5.dp))
     Row(
       modifier = Modifier.fillMaxWidth(),
       horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
       com.example.model.NotebookCoverStyle.entries.forEach { cover ->
-        val isSel = selectedCover == cover
+        val isSel = selectedCover == cover && !hasCustomCover
         val coverTint =
           when (cover) {
             com.example.model.NotebookCoverStyle.KRAFT_TAN -> Color(0xFFC29B61)
@@ -3635,6 +3754,7 @@ private fun AddPageAndTemplatePopover(
               )
               .clickable {
                 selectedCover = cover
+                onClearCustomCover()
                 onUpdateNotebookCover(cover)
               }
               .padding(horizontal = 5.dp)
@@ -3659,6 +3779,49 @@ private fun AddPageAndTemplatePopover(
             maxLines = 1,
           )
         }
+      }
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    // Toggle: Make Cover the First Page so users can write on it!
+    Row(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .clip(RoundedCornerShape(8.dp))
+          .background(PopoverInnerBg)
+          .clickable { onToggleCoverAsFirstPage(!coverAsFirstPage) }
+          .padding(horizontal = 10.dp, vertical = 7.dp),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Column(modifier = Modifier.weight(1f)) {
+        Text(
+          text = "Use Cover as Page 1 (Write on Cover)",
+          color = TextPrimaryWhite,
+          fontSize = 11.5.sp,
+          fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+          text = "Draw & write titles directly on your notebook cover",
+          color = TextSecondaryGray,
+          fontSize = 9.5.sp,
+        )
+      }
+      Box(
+        modifier =
+          Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(if (coverAsFirstPage) SwitchBlue else Color(0xFF343844))
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+      ) {
+        Text(
+          text = if (coverAsFirstPage) "ON" else "OFF",
+          color = Color.White,
+          fontSize = 10.sp,
+          fontWeight = FontWeight.Bold,
+        )
       }
     }
 
@@ -4149,7 +4312,21 @@ private fun PageThumbnailsSidebar(
                 .clip(RoundedCornerShape(4.dp))
                 .background(Color.White),
           ) {
-            if (page.pdfPageBitmap != null) {
+            val isThumbCover = index == 0 && document.coverAsFirstPage && !document.isImportedPdf
+            if (isThumbCover && document.customCoverBitmap != null) {
+              Image(
+                bitmap = document.customCoverBitmap.asImageBitmap(),
+                contentDescription = "Cover Page 1",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+              )
+            } else if (isThumbCover) {
+              FullPageNotebookCoverBackground(
+                coverStyle = document.coverStyle,
+                title = document.title,
+                modifier = Modifier.fillMaxSize(),
+              )
+            } else if (page.pdfPageBitmap != null) {
               Image(
                 bitmap = page.pdfPageBitmap.asImageBitmap(),
                 contentDescription = "Page ${page.pageNumber}",
@@ -4171,8 +4348,14 @@ private fun PageThumbnailsSidebar(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
           ) {
+            val pageLabel =
+              if (index == 0 && document.coverAsFirstPage && !document.isImportedPdf) {
+                if (page.isBookmarked) "Cover (P.1) ★" else "Cover (P.1)"
+              } else {
+                if (page.isBookmarked) "Page ${index + 1} ★" else "Page ${index + 1}"
+              }
             Text(
-              text = if (page.isBookmarked) "Page ${index + 1} ★" else "Page ${index + 1}",
+              text = pageLabel,
               color = TextPrimaryWhite,
               fontSize = 11.sp,
               fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
@@ -4342,22 +4525,25 @@ private fun DrawScope.drawRichStroke(
     return
   }
 
-  // 45° Italic Ribbon Rendering for Calligraphy Nib
+  // 45° Italic Ribbon Rendering for Calligraphy Nib (with seamless Round join/caps so curves never break)
   if (!stroke.isHighlighter && !stroke.isShape && stroke.penStyle == PenStyle.CALLIGRAPHY && stroke.strokePattern == StrokePattern.SOLID) {
     val nibAngleRad = Math.toRadians(45.0)
+    var prevW = stroke.strokeWidth
     for (i in 1 until stroke.points.size) {
       val p0 = stroke.points[i - 1]
       val p1 = stroke.points[i]
       val segAngle = atan2((p1.y - p0.y).toDouble(), (p1.x - p0.x).toDouble())
       val ribbonFactor = abs(sin(segAngle - nibAngleRad)).toFloat()
       val pr = if (i < stroke.pressures.size) stroke.pressures[i] else 0.7f
-      val w = (stroke.strokeWidth * (0.32f + 1.25f * ribbonFactor) * (0.75f + 0.35f * pr)).coerceAtLeast(1.6f)
+      val targetW = (stroke.strokeWidth * (0.36f + 1.22f * ribbonFactor) * (0.78f + 0.32f * pr)).coerceAtLeast(1.8f)
+      val w = if (i == 1) targetW else (prevW * 0.55f + targetW * 0.45f)
+      prevW = w
       drawLine(
         color = stroke.color,
         start = p0,
         end = p1,
         strokeWidth = w,
-        cap = StrokeCap.Square,
+        cap = StrokeCap.Round,
       )
     }
     return
@@ -4372,16 +4558,19 @@ private fun DrawScope.drawRichStroke(
       (stroke.penStyle == PenStyle.FOUNTAIN || stroke.penStyle == PenStyle.BRUSH)
 
   if (useVariablePressure) {
+    var prevWidth = stroke.strokeWidth
     for (i in 1 until stroke.points.size) {
       val p0 = stroke.points[i - 1]
       val p1 = stroke.points[i]
       val pr = ((stroke.pressures[i - 1] + stroke.pressures[i]) * 0.5f).coerceIn(0.15f, 1.5f)
-      val segWidth =
+      val rawWidth =
         when (stroke.penStyle) {
           PenStyle.FOUNTAIN -> stroke.strokeWidth * (0.55f + pr * 0.75f)
-          PenStyle.BRUSH -> stroke.strokeWidth * (0.40f + pr * 1.15f)
+          PenStyle.BRUSH -> stroke.strokeWidth * (0.42f + pr * 1.12f)
           else -> stroke.strokeWidth
         }
+      val segWidth = if (i == 1) rawWidth else (prevWidth * 0.6f + rawWidth * 0.4f)
+      prevWidth = segWidth
       drawLine(
         color = stroke.color,
         start = p0,
@@ -4407,14 +4596,241 @@ private fun DrawScope.drawRichStroke(
   }
 }
 
+/**
+ * Renders a Study Tape strip with any of the 7 decorative Washi Tape designs
+ * (Diagonal Stripes, Polka Dots, Grid Washi, Stardust, Gradient Glow, Exam Caution, Solid Mask)
+ * and a clear Lasso selection glow when enclosed by the Lasso tool.
+ */
+private fun DrawScope.drawStudyTapeStrip(
+  start: Offset,
+  end: Offset,
+  color: Color,
+  thickness: Float,
+  pattern: TapePattern,
+  isRevealed: Boolean,
+  isSelectedByLasso: Boolean,
+) {
+  val mid = Offset((start.x + end.x) * 0.5f, (start.y + end.y) * 0.5f)
+  if (isSelectedByLasso) {
+    drawLine(
+      color = SwitchBlue.copy(alpha = 0.55f),
+      start = start,
+      end = end,
+      strokeWidth = thickness + 10f,
+      cap = StrokeCap.Round,
+    )
+  }
+  if (isRevealed) {
+    drawLine(
+      color = color.copy(alpha = 0.18f),
+      start = start,
+      end = end,
+      strokeWidth = thickness,
+      cap = StrokeCap.Round,
+    )
+    drawLine(
+      color = color.copy(alpha = 0.68f),
+      start = start,
+      end = end,
+      strokeWidth = 2.4f,
+      cap = StrokeCap.Round,
+      pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f),
+    )
+    return
+  }
+
+  // Drop shadow
+  drawLine(
+    color = Color.Black.copy(alpha = 0.18f),
+    start = start,
+    end = end,
+    strokeWidth = thickness + 3f,
+    cap = StrokeCap.Round,
+  )
+
+  // Base Washi Tape Strip
+  if (pattern == TapePattern.GRADIENT_GLOW) {
+    val comp =
+      Color(
+        red = (color.red * 0.55f + 0.45f).coerceIn(0f, 1f),
+        green = (color.green * 0.4f + 0.25f).coerceIn(0f, 1f),
+        blue = (1f - color.blue * 0.3f).coerceIn(0f, 1f),
+        alpha = 0.96f,
+      )
+    drawLine(
+      brush = Brush.linearGradient(colors = listOf(color.copy(alpha = 0.96f), comp), start = start, end = end),
+      start = start,
+      end = end,
+      strokeWidth = thickness,
+      cap = StrokeCap.Round,
+    )
+  } else {
+    val baseColor = if (pattern == TapePattern.EXAM_CAUTION) Color(0xFFFACC15) else color.copy(alpha = 0.95f)
+    drawLine(
+      color = baseColor,
+      start = start,
+      end = end,
+      strokeWidth = thickness,
+      cap = StrokeCap.Round,
+    )
+  }
+
+  val dx = end.x - start.x
+  val dy = end.y - start.y
+  val len = hypot(dx, dy)
+  if (len > 4f) {
+    val ux = dx / len
+    val uy = dy / len
+    val nx = -uy
+    val ny = ux
+    val halfT = thickness * 0.36f
+
+    when (pattern) {
+      TapePattern.SOLID -> {
+        drawLine(
+          color = Color.White.copy(alpha = 0.32f),
+          start = start,
+          end = end,
+          strokeWidth = 2.2f,
+          cap = StrokeCap.Round,
+          pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f),
+        )
+      }
+      TapePattern.DIAGONAL_STRIPE -> {
+        var d = 10f
+        while (d < len - 8f) {
+          val cx = start.x + ux * d
+          val cy = start.y + uy * d
+          drawLine(
+            color = Color.White.copy(alpha = 0.36f),
+            start = Offset(cx - ux * 5f + nx * halfT, cy - uy * 5f + ny * halfT),
+            end = Offset(cx + ux * 5f - nx * halfT, cy + uy * 5f - ny * halfT),
+            strokeWidth = 2.6f,
+            cap = StrokeCap.Round,
+          )
+          d += 14f
+        }
+      }
+      TapePattern.POLKA_DOT -> {
+        var d = 12f
+        var idx = 0
+        while (d < len - 10f) {
+          val offsetSide = if (idx % 2 == 0) halfT * 0.45f else -halfT * 0.45f
+          val cx = start.x + ux * d + nx * offsetSide
+          val cy = start.y + uy * d + ny * offsetSide
+          drawCircle(
+            color = Color.White.copy(alpha = 0.48f),
+            radius = 3.2f,
+            center = Offset(cx, cy),
+          )
+          d += 14f
+          idx++
+        }
+      }
+      TapePattern.GRID_WASHI -> {
+        for (mul in listOf(-0.45f, 0f, 0.45f)) {
+          val ox = nx * halfT * mul
+          val oy = ny * halfT * mul
+          drawLine(
+            color = Color.White.copy(alpha = 0.30f),
+            start = Offset(start.x + ox, start.y + oy),
+            end = Offset(end.x + ox, end.y + oy),
+            strokeWidth = 1.3f,
+            cap = StrokeCap.Round,
+          )
+        }
+        var d = 12f
+        while (d < len - 8f) {
+          val cx = start.x + ux * d
+          val cy = start.y + uy * d
+          drawLine(
+            color = Color.White.copy(alpha = 0.30f),
+            start = Offset(cx + nx * halfT, cy + ny * halfT),
+            end = Offset(cx - nx * halfT, cy - ny * halfT),
+            strokeWidth = 1.3f,
+            cap = StrokeCap.Round,
+          )
+          d += 14f
+        }
+      }
+      TapePattern.STARDUST -> {
+        var d = 14f
+        var idx = 0
+        while (d < len - 10f) {
+          val side = if (idx % 2 == 0) halfT * 0.38f else -halfT * 0.38f
+          val cx = start.x + ux * d + nx * side
+          val cy = start.y + uy * d + ny * side
+          drawLine(
+            color = Color.White.copy(alpha = 0.65f),
+            start = Offset(cx - 4f, cy),
+            end = Offset(cx + 4f, cy),
+            strokeWidth = 1.6f,
+            cap = StrokeCap.Round,
+          )
+          drawLine(
+            color = Color.White.copy(alpha = 0.65f),
+            start = Offset(cx, cy - 4f),
+            end = Offset(cx, cy + 4f),
+            strokeWidth = 1.6f,
+            cap = StrokeCap.Round,
+          )
+          d += 18f
+          idx++
+        }
+      }
+      TapePattern.GRADIENT_GLOW -> {
+        drawLine(
+          color = Color.White.copy(alpha = 0.40f),
+          start = start,
+          end = end,
+          strokeWidth = 2.2f,
+          cap = StrokeCap.Round,
+        )
+      }
+      TapePattern.EXAM_CAUTION -> {
+        var d = 12f
+        while (d < len - 10f) {
+          val cx = start.x + ux * d
+          val cy = start.y + uy * d
+          drawLine(
+            color = Color(0xFF1E293B).copy(alpha = 0.65f),
+            start = Offset(cx - ux * 6f + nx * halfT, cy - uy * 6f + ny * halfT),
+            end = Offset(cx + ux * 6f - nx * halfT, cy + uy * 6f - ny * halfT),
+            strokeWidth = 4.2f,
+            cap = StrokeCap.Round,
+          )
+          d += 16f
+        }
+      }
+    }
+  }
+
+  // Center flashcard reveal indicator dot
+  drawCircle(
+    color = Color.White.copy(alpha = 0.90f),
+    radius = 4.2f,
+    center = mid,
+  )
+}
+
 private fun snapPointAlongRuler(
   start: Offset,
   current: Offset,
+  rulerPosition: Offset,
   angleDegrees: Float,
 ): Offset {
   val rad = Math.toRadians(angleDegrees.toDouble())
   val dirX = cos(rad).toFloat()
   val dirY = sin(rad).toFloat()
+  // Perpendicular distance from stroke start to the ruler centerline
+  val rx = start.x - rulerPosition.x
+  val ry = start.y - rulerPosition.y
+  val perpDist = abs(rx * (-dirY) + ry * dirX)
+  val alongDist = abs(rx * dirX + ry * dirY)
+  // Only snap strokes started near the ruler edge (within 95px perpendicular and 320px along length)
+  if (perpDist > 95f || alongDist > 320f) {
+    return current
+  }
   val dx = current.x - start.x
   val dy = current.y - start.y
   val proj = dx * dirX + dy * dirY
@@ -4605,517 +5021,132 @@ private fun DockedShapeStudioStrip(
   }
 }
 
+/**
+ * Renders the Notebook's Cover Artwork as a full-page canvas background on Page 1
+ * so users can write, title, and sketch directly on their notebook cover!
+ */
 @Composable
-private fun InteractiveFeatureTourOverlay(
-  step: Int,
-  selectedStylusBrand: com.example.model.StylusPenBrand,
-  strokeCount: Int,
-  shapeCount: Int,
-  showLassoSelection: Boolean,
-  laserTrailCount: Int,
-  onSelectStylusBrand: (com.example.model.StylusPenBrand) -> Unit,
-  onJumpToStep: (Int) -> Unit,
-  onRunAutoDemo: () -> Unit,
-  onOpenCinemaShowcase: () -> Unit,
-  onPrevStep: () -> Unit,
-  onNextStep: () -> Unit,
-  onDismiss: () -> Unit,
+private fun FullPageNotebookCoverBackground(
+  coverStyle: com.example.model.NotebookCoverStyle,
+  title: String,
   modifier: Modifier = Modifier,
 ) {
-  val context = LocalContext.current
-  val detectedHardware =
-    remember(StylusInputTracker.detectedHardwareBrand, StylusInputTracker.detectedDeviceName) {
-      StylusInputTracker.detectConnectedStylusHardware(context)
+  val bgColor =
+    when (coverStyle) {
+      com.example.model.NotebookCoverStyle.KRAFT_TAN -> Color(0xFFD9B88F)
+      com.example.model.NotebookCoverStyle.CHARCOAL_DARK -> Color(0xFF282A33)
+      com.example.model.NotebookCoverStyle.WHITE_DOCUMENT -> Color(0xFFF6F4EE)
+      com.example.model.NotebookCoverStyle.WHITEBOARD -> Color(0xFFEAF7F9)
+      com.example.model.NotebookCoverStyle.HANDWRITTEN_NOTES -> Color(0xFFEDF3FC)
+      com.example.model.NotebookCoverStyle.GRID_PAPER -> Color(0xFFF2F5F8)
     }
-  var isMinimized by remember { mutableStateOf(false) }
-  var showVideoGuide by remember { mutableStateOf(false) }
-
-  // Auto-apply detected stylus profile on Step 0
-  LaunchedEffect(step, detectedHardware.first) {
-    if (step == 0 && detectedHardware.first != selectedStylusBrand) {
-      onSelectStylusBrand(detectedHardware.first)
+  val spineColor =
+    when (coverStyle) {
+      com.example.model.NotebookCoverStyle.KRAFT_TAN -> Color(0xFF9C7648)
+      com.example.model.NotebookCoverStyle.CHARCOAL_DARK -> Color(0xFF17181E)
+      else -> Color(0xFF3E68A8)
     }
-  }
-
-  val baselineStrokes = remember(step) { strokeCount }
-  val baselineShapes = remember(step) { shapeCount }
-  val baselineLasers = remember(step) { laserTrailCount }
-
-  val stepCompleted =
-    when (step) {
-      0 -> strokeCount > baselineStrokes
-      1 -> shapeCount > baselineShapes
-      2 -> shapeCount > baselineShapes || strokeCount > baselineStrokes
-      3 -> showLassoSelection
-      4 -> laserTrailCount > baselineLasers
-      else -> strokeCount < baselineStrokes
+  val labelPlateBg =
+    when (coverStyle) {
+      com.example.model.NotebookCoverStyle.CHARCOAL_DARK -> Color(0xFF353844)
+      else -> Color.White.copy(alpha = 0.88f)
+    }
+  val labelTextColor =
+    when (coverStyle) {
+      com.example.model.NotebookCoverStyle.CHARCOAL_DARK -> Color.White
+      else -> Color(0xFF23262F)
     }
 
-  val stepLabels =
-    remember {
-      listOf("1. Stylus", "2. Circle Snap", "3. Shapes", "4. Lasso", "5. Laser/Tape", "6. Eraser")
+  Box(modifier = modifier.background(bgColor)) {
+    Canvas(modifier = Modifier.fillMaxSize()) {
+      val w = size.width
+      val h = size.height
+      val spineW = (w * 0.065f).coerceIn(22f, 48f)
+
+      // Subtle grid on GRID_PAPER cover
+      if (coverStyle == com.example.model.NotebookCoverStyle.GRID_PAPER) {
+        val step = 36f
+        var x = spineW
+        while (x < w) {
+          drawLine(
+            color = Color(0xFF90A4AE).copy(alpha = 0.25f),
+            start = Offset(x, 0f),
+            end = Offset(x, h),
+            strokeWidth = 1f,
+          )
+          x += step
+        }
+        var y = 0f
+        while (y < h) {
+          drawLine(
+            color = Color(0xFF90A4AE).copy(alpha = 0.25f),
+            start = Offset(spineW, y),
+            end = Offset(w, y),
+            strokeWidth = 1f,
+          )
+          y += step
+        }
+      }
+
+      // Bookbinding Spine on left edge
+      drawRect(
+        color = spineColor,
+        topLeft = Offset.Zero,
+        size = androidx.compose.ui.geometry.Size(spineW, h),
+      )
+      drawLine(
+        color = Color.Black.copy(alpha = 0.22f),
+        start = Offset(spineW, 0f),
+        end = Offset(spineW, h),
+        strokeWidth = 3f,
+      )
+
+      // Top-right ribbon bookmark accent
+      val ribbonX = w * 0.84f
+      drawRect(
+        color = Color(0xFF3B82F6).copy(alpha = 0.85f),
+        topLeft = Offset(ribbonX, 0f),
+        size = androidx.compose.ui.geometry.Size(w * 0.045f, h * 0.14f),
+      )
     }
 
-  val title =
-    when (step) {
-      0 -> "Step 1 of 6 · 7 Studio Pens & Live Stylus Engine"
-      1 -> "Step 2 of 6 · Draw & Hold Perfect Circle Snap"
-      2 -> "Step 3 of 6 · 14 Geometric Shapes & Ruler"
-      3 -> "Step 4 of 6 · Smart Lasso (Move vs. Lift)"
-      4 -> "Step 5 of 6 · Study Tape & Laser Pointer"
-      else -> "Step 6 of 6 · Precision Eraser & 3x Tap Video"
-    }
-
-  val instruction =
-    when (step) {
-      0 ->
-        "Active: ${selectedStylusBrand.label}. Try our 7 studio pens (Fountain, Fineliner, Calligraphy, Chisel Marker, Neon Glow) or tap '✨ Auto-Demo' to see pressure ink in action!"
-      1 ->
-        "Draw a freehand circle or polygon and HOLD your stylus tip still for 0.3s at the end — it snaps into a crisp geometric shape! Keep holding & drag outward to scale."
-      2 ->
-        "Draw angle brackets (< >), curves, diamonds, or stars, or toggle the rotatable Ruler in the writing strip to snap straight technical lines."
-      3 ->
-        "Circle any strokes: moving your selection automatically returns to your previous pen tool, while lifting without moving keeps Lasso active!"
-      4 ->
-        "Glide across the canvas with the Laser Pointer, or draw over answers with Study Tape and tap any tape strip to reveal/hide!"
-      else ->
-        "Swipe across strokes to erase cleanly — and remember: Triple-Tap (3x tap) anywhere on the canvas or header anytime to launch the full-screen Video Showcase!"
-    }
-
-  if (isMinimized) {
-    Row(
+    // Notebook Cover Title Plate in upper-center (Users can write anywhere on the cover!)
+    Column(
       modifier =
-        modifier
-          .shadow(14.dp, RoundedCornerShape(50))
-          .clip(RoundedCornerShape(50))
-          .background(Color(0xF5181C29))
-          .border(
-            1.5.dp,
-            if (stepCompleted) Color(0xFF4CAF50) else Color(0xFF38BDF8),
-            RoundedCornerShape(50),
-          )
-          .clickable { isMinimized = false }
-          .padding(horizontal = 16.dp, vertical = 10.dp)
-          .testTag("interactive_tour_minimized_pill"),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(10.dp),
+        Modifier
+          .align(Alignment.TopCenter)
+          .padding(top = 72.dp, start = 48.dp, end = 32.dp)
+          .widthIn(max = 380.dp)
+          .fillMaxWidth(0.76f)
+          .clip(RoundedCornerShape(14.dp))
+          .background(labelPlateBg)
+          .border(1.5.dp, spineColor.copy(alpha = 0.45f), RoundedCornerShape(14.dp))
+          .padding(horizontal = 24.dp, vertical = 18.dp),
+      horizontalAlignment = Alignment.CenterHorizontally,
     ) {
+      Text(
+        text = title,
+        color = labelTextColor,
+        fontSize = 20.sp,
+        fontWeight = FontWeight.ExtraBold,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+      )
+      Spacer(modifier = Modifier.height(6.dp))
       Box(
         modifier =
           Modifier
-            .size(8.dp)
-            .clip(CircleShape)
-            .background(if (stepCompleted) Color(0xFF4CAF50) else Color(0xFF38BDF8)),
+            .fillMaxWidth(0.6f)
+            .height(1.5.dp)
+            .background(spineColor.copy(alpha = 0.35f)),
       )
+      Spacer(modifier = Modifier.height(6.dp))
       Text(
-        text = "Tour ${step + 1}/6 · ${stepLabels.getOrElse(step) { "" }} (Tap to expand)",
-        color = Color.White,
-        fontSize = 12.sp,
+        text = "COVER PAGE • WRITE OR SKETCH ANYWHERE",
+        color = labelTextColor.copy(alpha = 0.55f),
+        fontSize = 9.5.sp,
         fontWeight = FontWeight.Bold,
       )
-      Text(
-        text = "Next →",
-        color = Color(0xFF38BDF8),
-        fontSize = 12.sp,
-        fontWeight = FontWeight.Bold,
-        modifier = Modifier.clickable(onClick = onNextStep),
-      )
-    }
-    return
-  }
-
-  val demoAnimProgress by
-    rememberInfiniteTransition(label = "tourVisualDemo")
-      .animateFloat(
-        initialValue = 0f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(tween(2200, easing = LinearEasing)),
-        label = "tourDemoProgress",
-      )
-
-  Column(
-    modifier =
-      modifier
-        .widthIn(max = 580.dp)
-        .fillMaxWidth()
-        .shadow(20.dp, RoundedCornerShape(22.dp))
-        .clip(RoundedCornerShape(22.dp))
-        .background(
-          Brush.verticalGradient(
-            colors = listOf(Color(0xF6161B28), Color(0xFA0F131D))
-          )
-        )
-        .border(
-          width = 1.5.dp,
-          color = if (stepCompleted) Color(0xFF4CAF50) else Color(0xFF38BDF8),
-          shape = RoundedCornerShape(22.dp),
-        )
-        .padding(15.dp)
-        .testTag("interactive_tour_coach_card"),
-  ) {
-    // Top Header Row: Status Badge + Title + Video PiP Toggle + Minimize + Close
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.SpaceBetween,
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Row(
-        modifier = Modifier.weight(1f),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        Box(
-          modifier =
-            Modifier
-              .clip(RoundedCornerShape(8.dp))
-              .background(
-                if (stepCompleted) Color(0xFF4CAF50).copy(alpha = 0.22f)
-                else Color(0xFF38BDF8).copy(alpha = 0.20f)
-              )
-              .padding(horizontal = 8.dp, vertical = 4.dp),
-        ) {
-          Text(
-            text = if (stepCompleted) "✓ COMPLETED" else "STUDIO TOUR",
-            color = if (stepCompleted) Color(0xFF81C784) else Color(0xFF67C8EB),
-            fontSize = 9.5.sp,
-            fontWeight = FontWeight.Bold,
-          )
-        }
-        Text(
-          text = title,
-          color = Color.White,
-          fontSize = 13.sp,
-          fontWeight = FontWeight.Bold,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-      }
-
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-      ) {
-        // Toggle Embedded Video Guide PiP
-        Box(
-          modifier =
-            Modifier
-              .clip(RoundedCornerShape(8.dp))
-              .background(if (showVideoGuide) Color(0xFF38BDF8).copy(alpha = 0.24f) else Color(0xFF232838))
-              .clickable { showVideoGuide = !showVideoGuide }
-              .padding(horizontal = 8.dp, vertical = 4.dp)
-              .testTag("tour_toggle_video_pip_button"),
-        ) {
-          Text(
-            text = if (showVideoGuide) "Hide Video" else "🎬 Video Clip",
-            color = if (showVideoGuide) Color(0xFF67C8EB) else Color(0xFFD5D9E4),
-            fontSize = 10.sp,
-            fontWeight = FontWeight.SemiBold,
-          )
-        }
-
-        // Minimize HUD Pill button
-        Box(
-          modifier =
-            Modifier
-              .clip(RoundedCornerShape(8.dp))
-              .background(Color(0xFF232838))
-              .clickable { isMinimized = true }
-              .padding(horizontal = 7.dp, vertical = 4.dp)
-              .testTag("tour_minimize_button"),
-        ) {
-          Text(
-            text = "—",
-            color = TextSecondaryGray,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Bold,
-          )
-        }
-
-        Icon(
-          imageVector = Icons.Default.Close,
-          contentDescription = "Exit Tour",
-          tint = TextSecondaryGray,
-          modifier =
-            Modifier
-              .size(20.dp)
-              .clickable(onClick = onDismiss)
-              .testTag("dismiss_interactive_tour_button"),
-        )
-      }
-    }
-
-    Spacer(modifier = Modifier.height(8.dp))
-
-    // Interactive Clickable Step Pills Bar (Jump directly to any of the 6 steps)
-    Row(
-      modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-      horizontalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-      stepLabels.forEachIndexed { idx, label ->
-        val isCurrent = idx == step
-        Box(
-          modifier =
-            Modifier
-              .clip(RoundedCornerShape(8.dp))
-              .background(
-                when {
-                  isCurrent && stepCompleted -> Color(0xFF4CAF50).copy(alpha = 0.26f)
-                  isCurrent -> Color(0xFF38BDF8).copy(alpha = 0.24f)
-                  idx < step -> Color(0xFF1E293B)
-                  else -> Color(0xFF151924)
-                }
-              )
-              .border(
-                1.dp,
-                when {
-                  isCurrent && stepCompleted -> Color(0xFF4CAF50)
-                  isCurrent -> Color(0xFF38BDF8)
-                  else -> Color.White.copy(alpha = 0.08f)
-                },
-                RoundedCornerShape(8.dp),
-              )
-              .clickable { onJumpToStep(idx) }
-              .padding(horizontal = 9.dp, vertical = 4.dp)
-              .testTag("tour_step_pill_$idx"),
-        ) {
-          Text(
-            text = label,
-            color = if (isCurrent) Color.White else TextSecondaryGray,
-            fontSize = 10.sp,
-            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
-          )
-        }
-      }
-    }
-
-    Spacer(modifier = Modifier.height(8.dp))
-
-    // Optional Embedded Onboarding Video PiP Player + Animated Canvas Telemetry Strip
-    if (showVideoGuide) {
-      Row(
-        modifier =
-          Modifier
-            .fillMaxWidth()
-            .height(96.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(Color.Black)
-            .border(1.dp, Color(0xFF38BDF8).copy(alpha = 0.45f), RoundedCornerShape(12.dp)),
-        verticalAlignment = Alignment.CenterVertically,
-      ) {
-        Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
-          AndroidView(
-            factory = { ctx ->
-              VideoView(ctx).apply {
-                val uri = Uri.parse("android.resource://${ctx.packageName}/${R.raw.onboarding_video}")
-                setVideoURI(uri)
-                setOnPreparedListener { mp ->
-                  mp.isLooping = true
-                  mp.setVolume(0f, 0f)
-                  start()
-                }
-              }
-            },
-            modifier = Modifier.fillMaxSize(),
-          )
-        }
-        Column(
-          modifier = Modifier.width(150.dp).padding(10.dp),
-          verticalArrangement = Arrangement.SpaceBetween,
-        ) {
-          Text(
-            text = "Pro Notes Reel",
-            color = Color.White,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-          )
-          Text(
-            text = "Triple-tap screen anytime for full-screen video!",
-            color = TextSecondaryGray,
-            fontSize = 9.5.sp,
-            lineHeight = 13.sp,
-          )
-          Box(
-            modifier =
-              Modifier
-                .clip(RoundedCornerShape(6.dp))
-                .background(Color(0xFF38BDF8).copy(alpha = 0.22f))
-                .clickable(onClick = onOpenCinemaShowcase)
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-          ) {
-            Text(
-              text = "Full Screen ↗",
-              color = Color(0xFF67C8EB),
-              fontSize = 9.5.sp,
-              fontWeight = FontWeight.Bold,
-            )
-          }
-        }
-      }
-      Spacer(modifier = Modifier.height(8.dp))
-    } else {
-      Row(
-        modifier =
-          Modifier
-            .fillMaxWidth()
-            .height(50.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .background(Color(0xFF0E121B))
-            .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween,
-      ) {
-        Canvas(modifier = Modifier.weight(1f).fillMaxHeight()) {
-          val w = size.width
-          val h = size.height
-          val p = demoAnimProgress
-          when (step) {
-            0 -> {
-              val path = Path().apply {
-                moveTo(w * 0.05f, h * 0.5f)
-                cubicTo(w * 0.28f, h * 0.1f, w * 0.52f, h * 0.9f, w * 0.82f * p.coerceAtLeast(0.15f), h * 0.5f)
-              }
-              drawPath(path, color = Color(0xFF67C8EB), style = Stroke(width = 4f, cap = StrokeCap.Round))
-              val tipX = w * 0.82f * p.coerceAtLeast(0.15f)
-              drawCircle(Color(0xFF4C8DF6).copy(alpha = 0.3f), radius = 10f, center = Offset(tipX, h * 0.5f))
-            }
-            1, 2 -> {
-              val cx = w * 0.45f
-              val cy = h * 0.5f
-              drawCircle(
-                color = if (p > 0.5f) Color(0xFF4CAF50) else Color(0xFF67C8EB),
-                radius = h * 0.36f,
-                center = Offset(cx, cy),
-                style = Stroke(width = if (p > 0.5f) 4f else 2.5f),
-              )
-            }
-            3 -> {
-              drawCircle(
-                color = SwitchBlue,
-                radius = h * 0.36f,
-                center = Offset(w * 0.45f, h * 0.5f),
-                style = Stroke(
-                  width = 3f,
-                  pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), p * 24f),
-                ),
-              )
-            }
-            else -> {
-              val endX = w * (0.15f + 0.7f * p)
-              drawLine(
-                color = Color(0xFFF43F5E).copy(alpha = 0.35f),
-                start = Offset(w * 0.12f, h * 0.5f),
-                end = Offset(endX, h * 0.5f),
-                strokeWidth = 14f,
-                cap = StrokeCap.Round,
-              )
-              drawLine(
-                color = Color.White,
-                start = Offset(w * 0.12f, h * 0.5f),
-                end = Offset(endX, h * 0.5f),
-                strokeWidth = 3.5f,
-                cap = StrokeCap.Round,
-              )
-            }
-          }
-        }
-
-        Spacer(modifier = Modifier.width(10.dp))
-
-        Column(horizontalAlignment = Alignment.End) {
-          Text(
-            text = selectedStylusBrand.label,
-            color = Color(0xFF67C8EB),
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold,
-          )
-          Text(
-            text =
-              if (StylusInputTracker.isStylusActive) "Live Stylus Telemetry"
-              else "Triple-Tap = Video Reel",
-            color = if (StylusInputTracker.isStylusActive) Color(0xFF81C784) else TextSecondaryGray,
-            fontSize = 9.5.sp,
-          )
-        }
-      }
-      Spacer(modifier = Modifier.height(8.dp))
-    }
-
-    Text(
-      text = instruction,
-      color = Color(0xFFD5D9E4),
-      fontSize = 11.5.sp,
-      lineHeight = 16.5.sp,
-    )
-
-    Spacer(modifier = Modifier.height(10.dp))
-
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.SpaceBetween,
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      // Auto-Demo Step Button (Demonstrates current step live on canvas!)
-      Box(
-        modifier =
-          Modifier
-            .height(34.dp)
-            .clip(RoundedCornerShape(10.dp))
-            .background(Color(0xFF1E293B))
-            .border(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f), RoundedCornerShape(10.dp))
-            .clickable(onClick = onRunAutoDemo)
-            .padding(horizontal = 12.dp)
-            .testTag("interactive_tour_auto_demo_button"),
-        contentAlignment = Alignment.Center,
-      ) {
-        Text(
-          text = "✨ Auto-Demo Step",
-          color = Color(0xFF67C8EB),
-          fontSize = 11.5.sp,
-          fontWeight = FontWeight.Bold,
-        )
-      }
-
-      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (step > 0) {
-          Box(
-            modifier =
-              Modifier
-                .height(34.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(Color(0xFF282C3A))
-                .clickable(onClick = onPrevStep)
-                .padding(horizontal = 12.dp),
-            contentAlignment = Alignment.Center,
-          ) {
-            Text(
-              text = "Back",
-              color = Color.White,
-              fontSize = 12.sp,
-              fontWeight = FontWeight.Medium,
-            )
-          }
-        }
-
-        Box(
-          modifier =
-            Modifier
-              .height(34.dp)
-              .clip(RoundedCornerShape(10.dp))
-              .background(if (stepCompleted) Color(0xFF4CAF50) else SwitchBlue)
-              .clickable(onClick = onNextStep)
-              .padding(horizontal = 16.dp)
-              .testTag("interactive_tour_next_button"),
-          contentAlignment = Alignment.Center,
-        ) {
-          Text(
-            text = if (step >= 5) "Finish Tour" else if (stepCompleted) "Next Feature →" else "Next Step →",
-            color = Color.White,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-          )
-        }
-      }
     }
   }
 }

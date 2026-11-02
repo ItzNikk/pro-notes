@@ -218,6 +218,21 @@ fun ProNotesAppRoot(
       }
     }
 
+  // System Picker for importing a Custom Notebook Cover Image
+  val customCoverPickerLauncher =
+    rememberLauncherForActivityResult(
+      contract = ActivityResultContracts.GetContent(),
+    ) { uri ->
+      if (uri != null) {
+        ioScope.launch {
+          val bmp = PdfImportHelper.decodeImageFromUri(context, uri)
+          if (bmp != null) {
+            viewModel.importCustomNotebookCover(bmp)
+          }
+        }
+      }
+    }
+
   // System CreateDocument launchers for saving exported PDF / PNG
   val exportPdfLauncher =
     rememberLauncherForActivityResult(
@@ -284,10 +299,6 @@ fun ProNotesAppRoot(
     } else if (showOnboarding) {
       OnboardingScreen(
         onStartCreating = { completeOnboarding() },
-        onTakeTour = {
-          completeOnboarding()
-          viewModel.startInteractiveTour()
-        },
         onStylusAutoDetected = { brand ->
           viewModel.selectStylusBrand(brand)
         },
@@ -339,7 +350,10 @@ fun ProNotesAppRoot(
           stylusQuickSwatches = uiState.quickSwatches,
           stylusCustomPalette = uiState.customPalette,
           onAddCustomColorToStylusPalette = viewModel::addCustomColorToPalette,
-          onOpenVideoShowcase = viewModel::openThankYouScreen,
+          onImportCustomCoverForNotebook = { docId ->
+            viewModel.setCustomCoverTargetNotebookId(docId)
+            customCoverPickerLauncher.launch("image/*")
+          },
         )
       }
 
@@ -410,7 +424,6 @@ fun ProNotesAppRoot(
           onToggleStylusTailEraser = viewModel::toggleStylusTailEraser,
           onUpdateDeveloperUpiInfo = viewModel::updateDeveloperUpiInfo,
           onOpenThankYouScreen = viewModel::openThankYouScreen,
-          onStartInteractiveTour = viewModel::startInteractiveTour,
           onEmptyTrash = viewModel::emptyTrash,
           onResetAllDataToDefaults = viewModel::clearAllLocalStorage,
           onNavigateBack = viewModel::closeSettingsScreen,
@@ -449,7 +462,8 @@ fun ProNotesAppRoot(
               clip.textBoxes.isNotEmpty() ||
               clip.elements.isNotEmpty() ||
               clip.stickyNotes.isNotEmpty() ||
-              clip.images.isNotEmpty())
+              clip.images.isNotEmpty() ||
+              clip.studyTapes.isNotEmpty())
 
         EditorScreen(
           uiState = uiState,
@@ -460,6 +474,10 @@ fun ProNotesAppRoot(
           onImportPdfFromDevice = { pdfPickerLauncher.launch(arrayOf("application/pdf")) },
           onImportImageFromDevice = { imagePickerLauncher.launch("image/*") },
           onImportCustomTemplateFromDevice = { customTemplatePickerLauncher.launch("*/*") },
+          onImportCustomCoverFromDevice = {
+            viewModel.setCustomCoverTargetNotebookId(uiState.activeTabId)
+            customCoverPickerLauncher.launch("image/*")
+          },
           onExportFullPdf = {
             if (activeDoc != null) {
               ioScope.launch {
@@ -513,6 +531,7 @@ fun ProNotesAppRoot(
     if (uiState.activePopover == com.example.model.ActivePopover.NEW_NOTE_DIALOG) {
       CreateNotebookStudioDialog(
         customTemplates = uiState.customTemplates,
+        pendingCustomCoverBitmap = uiState.pendingNewNotebookCustomCover,
         onCreateNotebook = { title, cover, template, colorTheme, docType, pageSize, orientation, customTmpl ->
           if (docType == DocumentType.WHITEBOARD) {
             viewModel.createNewWhiteboard(title)
@@ -544,7 +563,27 @@ fun ProNotesAppRoot(
         onImportCustomTemplate = {
           customTemplatePickerLauncher.launch("*/*")
         },
+        onImportCustomCover = {
+          viewModel.setCustomCoverTargetNotebookId(null)
+          customCoverPickerLauncher.launch("image/*")
+        },
+        onClearCustomCover = {
+          viewModel.setPendingNewNotebookCustomCover(null)
+        },
         onDismiss = viewModel::dismissPopover,
+      )
+    }
+
+    // Random-Interval "Support the Developer" Prompt Dialog
+    if (uiState.showSupportDevPromptDialog) {
+      SupportDeveloperRandomDialog(
+        developerName = uiState.developerDisplayName,
+        developerUpiId = uiState.developerUpiId,
+        onSupportHandled = {
+          viewModel.dismissSupportDevPrompt()
+          viewModel.openThankYouScreen()
+        },
+        onDismiss = viewModel::dismissSupportDevPrompt,
       )
     }
 
@@ -564,13 +603,14 @@ fun ProNotesAppRoot(
 /**
  * Redesigned Goodnotes-style Create Document & Custom Template Studio Dialog (Stages 6 & 7):
  * - Document Type: Notebook vs Whiteboard
- * - Cover Picker, Paper Size (Goodnotes Standard, A4, US Letter), Orientation (Portrait, Landscape)
+ * - Cover Picker + Custom Cover Import, Paper Size, Orientation
  * - Paper Color Theme (Pure White, Goodnotes Cream, Night Dark, Sage Eye-Care)
  * - Visual Template Gallery with all 10 built-in templates + imported custom templates + "+ Import Custom Template"
  */
 @Composable
 private fun CreateNotebookStudioDialog(
   customTemplates: List<CustomPageTemplate>,
+  pendingCustomCoverBitmap: android.graphics.Bitmap? = null,
   onCreateNotebook: (
     String,
     NotebookCoverStyle,
@@ -584,6 +624,8 @@ private fun CreateNotebookStudioDialog(
   onPickPdfFromDevice: () -> Unit,
   onLoadSamplePdf: () -> Unit,
   onImportCustomTemplate: () -> Unit,
+  onImportCustomCover: () -> Unit = {},
+  onClearCustomCover: () -> Unit = {},
   onDismiss: () -> Unit,
 ) {
   val colors = LocalProNotesColors.current
@@ -848,12 +890,39 @@ private fun CreateNotebookStudioDialog(
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        Text(
-          text = "COVER STYLE",
-          color = colors.textSecondary,
-          fontSize = 10.5.sp,
-          fontWeight = FontWeight.SemiBold,
-        )
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Text(
+            text = "COVER STYLE (PAGE 1 WRITABLE COVER)",
+            color = colors.textSecondary,
+            fontSize = 10.5.sp,
+            fontWeight = FontWeight.SemiBold,
+          )
+          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (pendingCustomCoverBitmap != null) {
+              Text(
+                text = "Clear Custom Cover",
+                color = Color(0xFFEF5350),
+                fontSize = 10.5.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.clickable(onClick = onClearCustomCover),
+              )
+            }
+            Text(
+              text = if (pendingCustomCoverBitmap != null) "✓ Custom Cover Loaded" else "+ Import Custom Cover",
+              color = Color(0xFF67C8EB),
+              fontSize = 10.5.sp,
+              fontWeight = FontWeight.SemiBold,
+              modifier =
+                Modifier
+                  .clickable(onClick = onImportCustomCover)
+                  .testTag("dialog_import_custom_cover_button"),
+            )
+          }
+        }
         Spacer(modifier = Modifier.height(6.dp))
         Row(
           modifier = Modifier.fillMaxWidth(),
@@ -865,7 +934,7 @@ private fun CreateNotebookStudioDialog(
             NotebookCoverStyle.WHITEBOARD,
             NotebookCoverStyle.GRID_PAPER,
           ).forEach { cover ->
-            val isSelected = cover == selectedCover
+            val isSelected = cover == selectedCover && pendingCustomCoverBitmap == null
             Box(
               modifier =
                 Modifier
@@ -873,7 +942,10 @@ private fun CreateNotebookStudioDialog(
                   .height(34.dp)
                   .clip(RoundedCornerShape(8.dp))
                   .background(if (isSelected) SwitchBlue else colors.surfaceVariant)
-                  .clickable { selectedCover = cover }
+                  .clickable {
+                    onClearCustomCover()
+                    selectedCover = cover
+                  }
                   .padding(horizontal = 4.dp),
               contentAlignment = Alignment.Center,
             ) {
@@ -1094,6 +1166,163 @@ private fun CreateNotebookStudioDialog(
           fontSize = 14.sp,
           fontWeight = FontWeight.Bold,
         )
+      }
+    }
+  }
+}
+
+@Composable
+private fun SupportDeveloperRandomDialog(
+  developerName: String,
+  developerUpiId: String,
+  onSupportHandled: () -> Unit,
+  onDismiss: () -> Unit,
+) {
+  val context = LocalContext.current
+  val colors = LocalProNotesColors.current
+
+  Box(
+    modifier =
+      Modifier
+        .fillMaxSize()
+        .background(Color.Black.copy(alpha = 0.62f))
+        .clickable(onClick = onDismiss),
+    contentAlignment = Alignment.Center,
+  ) {
+    Column(
+      modifier =
+        Modifier
+          .widthIn(max = 390.dp)
+          .fillMaxWidth(0.9f)
+          .shadow(24.dp, RoundedCornerShape(22.dp))
+          .clip(RoundedCornerShape(22.dp))
+          .background(colors.popoverBg)
+          .border(1.5.dp, Color(0xFFF472B6).copy(alpha = 0.65f), RoundedCornerShape(22.dp))
+          .clickable(enabled = false) {}
+          .padding(22.dp)
+          .testTag("support_developer_random_dialog"),
+      horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+      Box(
+        modifier =
+          Modifier
+            .clip(RoundedCornerShape(50))
+            .background(Color(0xFFF472B6).copy(alpha = 0.18f))
+            .padding(horizontal = 12.dp, vertical = 5.dp),
+      ) {
+        Text(
+          text = "☕ INDEPENDENT CREATOR",
+          color = Color(0xFFF472B6),
+          fontSize = 10.5.sp,
+          fontWeight = FontWeight.ExtraBold,
+        )
+      }
+
+      Spacer(modifier = Modifier.height(12.dp))
+
+      Text(
+        text = "Enjoying Pro Notes?",
+        color = colors.textPrimary,
+        fontSize = 20.sp,
+        fontWeight = FontWeight.ExtraBold,
+      )
+
+      Spacer(modifier = Modifier.height(6.dp))
+
+      Text(
+        text = "Pro Notes is crafted with care by $developerName with zero ads or paywalls. If it helps your daily study or work, consider supporting future updates!",
+        color = colors.textSecondary,
+        fontSize = 13.sp,
+        lineHeight = 18.5.sp,
+        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+      )
+
+      Spacer(modifier = Modifier.height(18.dp))
+
+      // Primary UPI Launch Button
+      Box(
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .height(44.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(
+              androidx.compose.ui.graphics.Brush.horizontalGradient(
+                colors = listOf(Color(0xFF8B5CF6), Color(0xFFEC4899))
+              )
+            )
+            .clickable {
+              runCatching {
+                val upiUri =
+                  android.net.Uri.parse(
+                    "upi://pay?pa=${android.net.Uri.encode(developerUpiId)}&pn=${android.net.Uri.encode(developerName)}&cu=INR"
+                  )
+                val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, upiUri)
+                context.startActivity(intent)
+              }
+              onSupportHandled()
+            }
+            .testTag("random_dialog_support_upi_button"),
+        contentAlignment = Alignment.Center,
+      ) {
+        Text(
+          text = "Support via UPI App ($developerUpiId)",
+          color = Color.White,
+          fontSize = 13.5.sp,
+          fontWeight = FontWeight.Bold,
+        )
+      }
+
+      Spacer(modifier = Modifier.height(8.dp))
+
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        Box(
+          modifier =
+            Modifier
+              .weight(1f)
+              .height(38.dp)
+              .clip(RoundedCornerShape(10.dp))
+              .background(colors.surfaceVariant)
+              .border(1.dp, colors.border, RoundedCornerShape(10.dp))
+              .clickable {
+                val clipboard =
+                  context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+                clipboard?.setPrimaryClip(
+                  android.content.ClipData.newPlainText("Developer UPI ID", developerUpiId)
+                )
+                onSupportHandled()
+              },
+          contentAlignment = Alignment.Center,
+        ) {
+          Text(
+            text = "Copy UPI ID",
+            color = colors.textPrimary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+          )
+        }
+
+        Box(
+          modifier =
+            Modifier
+              .weight(1f)
+              .height(38.dp)
+              .clip(RoundedCornerShape(10.dp))
+              .background(colors.surfaceVariant)
+              .clickable(onClick = onDismiss)
+              .testTag("random_dialog_maybe_later_button"),
+          contentAlignment = Alignment.Center,
+        ) {
+          Text(
+            text = "Maybe Later",
+            color = colors.textSecondary,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+          )
+        }
       }
     }
   }
