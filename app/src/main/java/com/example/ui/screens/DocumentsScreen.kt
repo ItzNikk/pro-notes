@@ -86,10 +86,15 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.offset
 import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
@@ -123,6 +128,7 @@ import com.example.ui.theme.BookCoverWhiteboard
 import com.example.ui.theme.DangerRed
 import com.example.ui.theme.LocalProNotesColors
 import com.example.ui.theme.NewButtonBlue
+import com.example.ui.theme.PenColorGridPalette
 import com.example.ui.theme.SwitchBlue
 
 @Composable
@@ -160,16 +166,25 @@ fun DocumentsScreen(
   onRestoreFromTrash: (String) -> Unit,
   onDeletePermanently: (String) -> Unit,
   onOpenSettings: () -> Unit,
+  stylusQuickSwatches: List<Color> = emptyList(),
+  stylusCustomPalette: List<Color> = emptyList(),
+  onAddCustomColorToStylusPalette: (Color) -> Unit = {},
+  onOpenVideoShowcase: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
   val colors = LocalProNotesColors.current
 
-  // Modals for "+ New" creation menu, Folder creation, Rename, and Move
+  // Modals for "+ New" creation menu, Folder creation, Folder Color Studio, Rename, and Move
   var showNewCreationMenu by remember { mutableStateOf(false) }
   var showCreateFolderDialog by remember { mutableStateOf(false) }
+  var colorStudioFolderTarget by remember { mutableStateOf<FolderItem?>(null) }
   var renameTarget by remember { mutableStateOf<Pair<Boolean, String>?>(null) } // (isFolder, id)
   var renameInitialTitle by remember { mutableStateOf("") }
   var moveTarget by remember { mutableStateOf<Pair<Boolean, String>?>(null) } // (isFolder, id)
+
+  // Triple-tap (3x tap) tracker on header title / logo to launch video showcase
+  var headerTapCount by remember { mutableIntStateOf(0) }
+  var lastHeaderTapMs by remember { mutableStateOf(0L) }
 
   // Interactive Drag-and-Drop state for dragging Notebooks into Folders and Folders into Folders
   var activeDragItem by remember { mutableStateOf<Pair<Boolean, String>?>(null) } // (isFolder, id)
@@ -186,7 +201,7 @@ fun DocumentsScreen(
       val dragging = activeDragItem ?: return@remember null
       val (isDraggingFolder, draggedId) = dragging
       folderDropBounds.entries.firstOrNull { (candidateFolderId, rect) ->
-        rect.contains(dragPointerInRoot) &&
+        rect.inflate(18f).contains(dragPointerInRoot) &&
           (!isDraggingFolder || (candidateFolderId != draggedId && onCanMoveFolder(draggedId, candidateFolderId)))
       }?.key
     }
@@ -195,7 +210,7 @@ fun DocumentsScreen(
     remember(activeDragItem, dragPointerInRoot, rootBreadcrumbBounds, currentFolderId) {
       activeDragItem != null &&
         currentFolderId != null &&
-        rootBreadcrumbBounds?.contains(dragPointerInRoot) == true
+        rootBreadcrumbBounds?.inflate(14f)?.contains(dragPointerInRoot) == true
     }
 
   val visibleFolders =
@@ -392,6 +407,20 @@ fun DocumentsScreen(
             color = colors.textPrimary,
             fontSize = if (isCompact) 22.sp else 26.sp,
             fontWeight = FontWeight.Bold,
+            modifier =
+              Modifier.clickable {
+                val now = System.currentTimeMillis()
+                if (now - lastHeaderTapMs <= 480L) {
+                  headerTapCount += 1
+                } else {
+                  headerTapCount = 1
+                }
+                lastHeaderTapMs = now
+                if (headerTapCount >= 3) {
+                  headerTapCount = 0
+                  onOpenVideoShowcase()
+                }
+              },
           )
 
           Row(
@@ -695,7 +724,82 @@ fun DocumentsScreen(
           }
         }
 
-        Spacer(modifier = Modifier.height(14.dp))
+        Spacer(modifier = Modifier.height(10.dp))
+
+        // Quick-Drop Folder Target Bar (Always visible when dragging or when active folders exist)
+        val activeRootFolders = remember(folders) { folders.filter { !it.isTrashed } }
+        if (activeRootFolders.isNotEmpty() && selectedSection == DocumentsSidebarSection.DOCUMENTS) {
+          Row(
+            modifier =
+              Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(
+                  if (activeDragItem != null) Color(0xFF38BDF8).copy(alpha = 0.12f)
+                  else colors.surfaceVariant.copy(alpha = 0.55f)
+                )
+                .border(
+                  1.dp,
+                  if (activeDragItem != null) Color(0xFF38BDF8).copy(alpha = 0.55f)
+                  else colors.border.copy(alpha = 0.65f),
+                  RoundedCornerShape(10.dp),
+                )
+                .padding(horizontal = 10.dp, vertical = 6.dp)
+                .testTag("folder_quick_drop_strip"),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+          ) {
+            Text(
+              text = if (activeDragItem != null) "DROP INTO:" else "FOLDERS:",
+              color = if (activeDragItem != null) Color(0xFF38BDF8) else colors.textSecondary,
+              fontSize = 10.sp,
+              fontWeight = FontWeight.ExtraBold,
+            )
+            activeRootFolders.take(6).forEach { targetFolder ->
+              val isDropHighlighted = hoveredDropFolderId == targetFolder.id
+              val fColor = folderColorFromArgb(targetFolder.colorArgb)
+              Row(
+                modifier =
+                  Modifier
+                    .onGloballyPositioned { coords ->
+                      // Register chip bounds if folder card isn't currently on screen
+                      if (visibleFolders.none { it.id == targetFolder.id }) {
+                        folderDropBounds[targetFolder.id] = coords.boundsInRoot()
+                      }
+                    }
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(
+                      if (isDropHighlighted) Color(0xFF34D399).copy(alpha = 0.28f)
+                      else fColor.copy(alpha = 0.16f)
+                    )
+                    .border(
+                      1.dp,
+                      if (isDropHighlighted) Color(0xFF34D399) else fColor.copy(alpha = 0.55f),
+                      RoundedCornerShape(8.dp),
+                    )
+                    .clickable { onNavigateToFolder(targetFolder.id) }
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+              ) {
+                Icon(
+                  imageVector = Icons.Default.Folder,
+                  contentDescription = null,
+                  tint = fColor,
+                  modifier = Modifier.size(13.dp),
+                )
+                Text(
+                  text = targetFolder.name,
+                  color = colors.textPrimary,
+                  fontSize = 11.sp,
+                  fontWeight = FontWeight.SemiBold,
+                  maxLines = 1,
+                )
+              }
+            }
+          }
+          Spacer(modifier = Modifier.height(10.dp))
+        }
 
         // Main Library View (Grid, List, or Empty Search State)
         if (searchQuery.isNotBlank() && visibleFolders.isEmpty() && filteredNotebooks.isEmpty()) {
@@ -820,6 +924,9 @@ fun DocumentsScreen(
                 },
                 onChangeFolderColor = { newColorArgb ->
                   onUpdateFolderColor(folder.id, newColorArgb)
+                },
+                onOpenColorStudio = {
+                  colorStudioFolderTarget = folder
                 },
                 onMoveFolder = {
                   moveTarget = true to folder.id
@@ -1019,14 +1126,37 @@ fun DocumentsScreen(
       }
     }
 
-    // Create Folder Modal Dialog
+    // Create Folder Modal Dialog (with Stylus Color System)
     if (showCreateFolderDialog) {
       CreateFolderModalDialog(
+        stylusQuickSwatches = stylusQuickSwatches,
+        stylusCustomPalette = stylusCustomPalette,
+        onAddCustomColorToStylusPalette = onAddCustomColorToStylusPalette,
         onConfirm = { name, colorArgb ->
           onCreateFolder(name, colorArgb)
           showCreateFolderDialog = false
         },
         onDismiss = { showCreateFolderDialog = false },
+      )
+    }
+
+    // Edit Existing Folder Color Studio Dialog (with Stylus Color System)
+    colorStudioFolderTarget?.let { targetFolder ->
+      CreateFolderModalDialog(
+        initialFolderName = targetFolder.name,
+        initialColorArgb = targetFolder.colorArgb,
+        isColorEditMode = true,
+        stylusQuickSwatches = stylusQuickSwatches,
+        stylusCustomPalette = stylusCustomPalette,
+        onAddCustomColorToStylusPalette = onAddCustomColorToStylusPalette,
+        onConfirm = { newName, colorArgb ->
+          if (newName.isNotBlank() && newName != targetFolder.name) {
+            onRenameFolder(targetFolder.id, newName)
+          }
+          onUpdateFolderColor(targetFolder.id, colorArgb)
+          colorStudioFolderTarget = null
+        },
+        onDismiss = { colorStudioFolderTarget = null },
       )
     }
 
@@ -1318,6 +1448,7 @@ private fun FolderGridCard(
   onOpenFolder: () -> Unit,
   onRenameFolder: () -> Unit,
   onChangeFolderColor: (Long) -> Unit = {},
+  onOpenColorStudio: () -> Unit = {},
   onMoveFolder: () -> Unit,
   onMoveToTrash: () -> Unit,
   onRestoreFromTrash: () -> Unit,
@@ -1327,6 +1458,10 @@ private fun FolderGridCard(
   var showMenu by remember { mutableStateOf(false) }
   var cardBoundsInRoot by remember { mutableStateOf(Rect.Zero) }
   val folderColor = folderColorFromArgb(folder.colorArgb)
+  val currentOnStartDrag by rememberUpdatedState(onStartDrag)
+  val currentOnDragMove by rememberUpdatedState(onDragMove)
+  val currentOnEndDrag by rememberUpdatedState(onEndDrag)
+  val currentOnCancelDrag by rememberUpdatedState(onCancelDrag)
 
   Column(
     horizontalAlignment = Alignment.CenterHorizontally,
@@ -1342,14 +1477,14 @@ private fun FolderGridCard(
           if (!folder.isTrashed) {
             detectDragGesturesAfterLongPress(
               onDragStart = { localOffset ->
-                onStartDrag(cardBoundsInRoot.topLeft + localOffset)
+                currentOnStartDrag(cardBoundsInRoot.topLeft + localOffset)
               },
               onDrag = { change, dragAmount ->
                 change.consume()
-                onDragMove(dragAmount)
+                currentOnDragMove(dragAmount)
               },
-              onDragEnd = onEndDrag,
-              onDragCancel = onCancelDrag,
+              onDragEnd = { currentOnEndDrag() },
+              onDragCancel = { currentOnCancelDrag() },
             )
           }
         }
@@ -1473,6 +1608,13 @@ private fun FolderGridCard(
               }
             }
             DropdownMenuItem(
+              text = { Text("Stylus Color Studio...", color = colors.accentBlue, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) },
+              onClick = {
+                showMenu = false
+                onOpenColorStudio()
+              },
+            )
+            DropdownMenuItem(
               text = { Text("Move to Folder...", color = colors.textPrimary, fontSize = 13.sp) },
               leadingIcon = {
                 Icon(
@@ -1568,6 +1710,10 @@ private fun NotebookGridCard(
   val colors = LocalProNotesColors.current
   var showCardMenu by remember { mutableStateOf(false) }
   var cardOriginInRoot by remember { mutableStateOf(Offset.Zero) }
+  val currentOnStartDrag by rememberUpdatedState(onStartDrag)
+  val currentOnDragMove by rememberUpdatedState(onDragMove)
+  val currentOnEndDrag by rememberUpdatedState(onEndDrag)
+  val currentOnCancelDrag by rememberUpdatedState(onCancelDrag)
 
   Column(
     horizontalAlignment = Alignment.CenterHorizontally,
@@ -1581,14 +1727,14 @@ private fun NotebookGridCard(
           if (!document.isTrashed) {
             detectDragGesturesAfterLongPress(
               onDragStart = { localOffset ->
-                onStartDrag(cardOriginInRoot + localOffset)
+                currentOnStartDrag(cardOriginInRoot + localOffset)
               },
               onDrag = { change, dragAmount ->
                 change.consume()
-                onDragMove(dragAmount)
+                currentOnDragMove(dragAmount)
               },
-              onDragEnd = onEndDrag,
-              onDragCancel = onCancelDrag,
+              onDragEnd = { currentOnEndDrag() },
+              onDragCancel = { currentOnCancelDrag() },
             )
           }
         }
@@ -1798,6 +1944,41 @@ private fun NotebookGridCard(
           )
         }
       }
+
+      // Instant Drag Handle Badge at bottom-start so users can drag immediately without waiting for long-press
+      if (!document.isTrashed) {
+        Box(
+          modifier =
+            Modifier
+              .align(Alignment.BottomStart)
+              .padding(6.dp)
+              .clip(RoundedCornerShape(6.dp))
+              .background(Color.Black.copy(alpha = 0.52f))
+              .pointerInput(document.id) {
+                detectDragGestures(
+                  onDragStart = { localOffset ->
+                    currentOnStartDrag(cardOriginInRoot + Offset(20f, 165f) + localOffset)
+                  },
+                  onDrag = { change, dragAmount ->
+                    change.consume()
+                    currentOnDragMove(dragAmount)
+                  },
+                  onDragEnd = { currentOnEndDrag() },
+                  onDragCancel = { currentOnCancelDrag() },
+                )
+              }
+              .padding(horizontal = 6.dp, vertical = 2.dp)
+              .testTag("notebook_drag_handle_${document.id}"),
+          contentAlignment = Alignment.Center,
+        ) {
+          Text(
+            text = "⋮⋮ Drag",
+            color = Color.White.copy(alpha = 0.88f),
+            fontSize = 8.5.sp,
+            fontWeight = FontWeight.Bold,
+          )
+        }
+      }
     }
 
     Spacer(modifier = Modifier.height(8.dp))
@@ -1864,6 +2045,10 @@ private fun FolderListRow(
   val colors = LocalProNotesColors.current
   val folderColor = folderColorFromArgb(folder.colorArgb)
   var rowBoundsInRoot by remember { mutableStateOf(Rect.Zero) }
+  val currentOnStartDrag by rememberUpdatedState(onStartDrag)
+  val currentOnDragMove by rememberUpdatedState(onDragMove)
+  val currentOnEndDrag by rememberUpdatedState(onEndDrag)
+  val currentOnCancelDrag by rememberUpdatedState(onCancelDrag)
   Row(
     modifier =
       Modifier
@@ -1877,14 +2062,14 @@ private fun FolderListRow(
           if (!folder.isTrashed) {
             detectDragGesturesAfterLongPress(
               onDragStart = { localOffset ->
-                onStartDrag(rowBoundsInRoot.topLeft + localOffset)
+                currentOnStartDrag(rowBoundsInRoot.topLeft + localOffset)
               },
               onDrag = { change, dragAmount ->
                 change.consume()
-                onDragMove(dragAmount)
+                currentOnDragMove(dragAmount)
               },
-              onDragEnd = onEndDrag,
-              onDragCancel = onCancelDrag,
+              onDragEnd = { currentOnEndDrag() },
+              onDragCancel = { currentOnCancelDrag() },
             )
           }
         }
@@ -1999,6 +2184,10 @@ private fun NotebookListRow(
 ) {
   val colors = LocalProNotesColors.current
   var rowOriginInRoot by remember { mutableStateOf(Offset.Zero) }
+  val currentOnStartDrag by rememberUpdatedState(onStartDrag)
+  val currentOnDragMove by rememberUpdatedState(onDragMove)
+  val currentOnEndDrag by rememberUpdatedState(onEndDrag)
+  val currentOnCancelDrag by rememberUpdatedState(onCancelDrag)
   Row(
     modifier =
       Modifier
@@ -2010,14 +2199,14 @@ private fun NotebookListRow(
           if (!document.isTrashed) {
             detectDragGesturesAfterLongPress(
               onDragStart = { localOffset ->
-                onStartDrag(rowOriginInRoot + localOffset)
+                currentOnStartDrag(rowOriginInRoot + localOffset)
               },
               onDrag = { change, dragAmount ->
                 change.consume()
-                onDragMove(dragAmount)
+                currentOnDragMove(dragAmount)
               },
-              onDragEnd = onEndDrag,
-              onDragCancel = onCancelDrag,
+              onDragEnd = { currentOnEndDrag() },
+              onDragCancel = { currentOnCancelDrag() },
             )
           }
         }
@@ -2155,18 +2344,41 @@ private fun VaultLockedCoverArtwork() {
   }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CreateFolderModalDialog(
+  initialFolderName: String = "",
+  initialColorArgb: Long = FolderPresetColors.first(),
+  isColorEditMode: Boolean = false,
+  stylusQuickSwatches: List<Color> = emptyList(),
+  stylusCustomPalette: List<Color> = emptyList(),
+  onAddCustomColorToStylusPalette: (Color) -> Unit = {},
   onConfirm: (String, Long) -> Unit,
   onDismiss: () -> Unit,
 ) {
   val colors = LocalProNotesColors.current
-  var folderName by remember { mutableStateOf("") }
+  var folderName by remember(initialFolderName) { mutableStateOf(initialFolderName) }
   val folderColorOptions = FolderPresetColors
-  var selectedColorIdx by remember { mutableIntStateOf(0) }
+
+  // Build unified Stylus Color Swatches (Quick Swatches + Custom Stylus Palette + Studio Grid)
+  val stylusCombinedSwatches =
+    remember(stylusQuickSwatches, stylusCustomPalette) {
+      val list = mutableListOf<Long>()
+      (stylusQuickSwatches + stylusCustomPalette + PenColorGridPalette.take(12)).forEach { c ->
+        val argb = (c.toArgb().toLong() and 0xFFFFFFFFL) or 0xFF000000L
+        if (list.none { (it or 0xFF000000L) == argb }) {
+          list.add(argb)
+        }
+      }
+      list
+    }
+
+  var selectedDirectColorArgb by remember(initialColorArgb) {
+    mutableStateOf((initialColorArgb.takeIf { it != 0L } ?: folderColorOptions.first()) or 0xFF000000L)
+  }
   var useCustomColor by remember { mutableStateOf(false) }
   var customHue by remember { mutableFloatStateOf(215f) }
-  var customSaturation by remember { mutableFloatStateOf(0.72f) }
+  var customSaturation by remember { mutableFloatStateOf(0.75f) }
   var customValue by remember { mutableFloatStateOf(0.95f) }
 
   val customColorArgb =
@@ -2177,24 +2389,24 @@ private fun CreateFolderModalDialog(
     }
 
   val resolvedColorArgb =
-    ((if (useCustomColor) customColorArgb else folderColorOptions[selectedColorIdx]) or 0xFF000000L)
+    ((if (useCustomColor) customColorArgb else selectedDirectColorArgb) or 0xFF000000L)
 
   Box(
     modifier =
       Modifier
         .fillMaxSize()
-        .background(Color.Black.copy(alpha = 0.6f))
+        .background(Color.Black.copy(alpha = 0.62f))
         .clickable(onClick = onDismiss),
     contentAlignment = Alignment.Center,
   ) {
     Column(
       modifier =
         Modifier
-          .widthIn(max = 380.dp)
-          .fillMaxWidth(0.92f)
-          .clip(RoundedCornerShape(16.dp))
+          .widthIn(max = 420.dp)
+          .fillMaxWidth(0.94f)
+          .clip(RoundedCornerShape(18.dp))
           .background(colors.popoverBg)
-          .border(1.dp, colors.border, RoundedCornerShape(16.dp))
+          .border(1.dp, colors.border, RoundedCornerShape(18.dp))
           .clickable(enabled = false) {}
           .padding(20.dp)
           .testTag("create_folder_dialog"),
@@ -2204,17 +2416,24 @@ private fun CreateFolderModalDialog(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
       ) {
-        Text(
-          text = "New Folder",
-          color = colors.textPrimary,
-          fontSize = 17.sp,
-          fontWeight = FontWeight.Bold,
-        )
+        Column {
+          Text(
+            text = if (isColorEditMode) "Folder Stylus Color Studio" else "New Folder",
+            color = colors.textPrimary,
+            fontSize = 17.sp,
+            fontWeight = FontWeight.Bold,
+          )
+          Text(
+            text = "Synced with your active Stylus Ink & Studio Palette",
+            color = colors.textSecondary,
+            fontSize = 11.sp,
+          )
+        }
         Icon(
           imageVector = Icons.Default.Folder,
           contentDescription = null,
           tint = folderColorFromArgb(resolvedColorArgb),
-          modifier = Modifier.size(36.dp),
+          modifier = Modifier.size(38.dp),
         )
       }
       Spacer(modifier = Modifier.height(12.dp))
@@ -2235,24 +2454,25 @@ private fun CreateFolderModalDialog(
 
       Spacer(modifier = Modifier.height(14.dp))
       Text(
-        text = "FOLDER COLOR",
+        text = "FOLDER PRESETS",
         color = colors.textSecondary,
-        fontSize = 10.5.sp,
-        fontWeight = FontWeight.SemiBold,
+        fontSize = 10.sp,
+        fontWeight = FontWeight.Bold,
       )
-      Spacer(modifier = Modifier.height(8.dp))
+      Spacer(modifier = Modifier.height(6.dp))
       Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
         folderColorOptions.take(6).forEachIndexed { idx, argb ->
-          val isSel = !useCustomColor && selectedColorIdx == idx
+          val normalized = argb or 0xFF000000L
+          val isSel = !useCustomColor && (selectedDirectColorArgb or 0xFF000000L) == normalized
           Box(
             modifier =
               Modifier
                 .size(28.dp)
                 .clip(CircleShape)
-                .background(folderColorFromArgb(argb))
+                .background(folderColorFromArgb(normalized))
                 .border(
                   width = if (isSel) 2.5.dp else 1.dp,
                   color = if (isSel) Color.White else Color.Transparent,
@@ -2260,13 +2480,13 @@ private fun CreateFolderModalDialog(
                 )
                 .clickable {
                   useCustomColor = false
-                  selectedColorIdx = idx
+                  selectedDirectColorArgb = normalized
                 }
                 .testTag("folder_color_preset_$idx"),
           )
         }
 
-        // Custom color picker toggle pill
+        // Custom HSV Studio toggle pill
         Box(
           modifier =
             Modifier
@@ -2284,11 +2504,50 @@ private fun CreateFolderModalDialog(
           contentAlignment = Alignment.Center,
         ) {
           Text(
-            text = "Custom",
+            text = "HSV Studio",
             color = if (useCustomColor) Color.White else colors.textSecondary,
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
           )
+        }
+      }
+
+      // Stylus Ink & Studio Swatches Row
+      if (stylusCombinedSwatches.isNotEmpty()) {
+        Spacer(modifier = Modifier.height(12.dp))
+        Text(
+          text = "STYLUS INK & STUDIO PALETTE",
+          color = colors.accentBlue,
+          fontSize = 10.sp,
+          fontWeight = FontWeight.Bold,
+        )
+        Spacer(modifier = Modifier.height(6.dp))
+        FlowRow(
+          horizontalArrangement = Arrangement.spacedBy(7.dp),
+          verticalArrangement = Arrangement.spacedBy(7.dp),
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          stylusCombinedSwatches.take(14).forEachIndexed { idx, argb ->
+            val normalized = argb or 0xFF000000L
+            val isSel = !useCustomColor && (selectedDirectColorArgb or 0xFF000000L) == normalized
+            Box(
+              modifier =
+                Modifier
+                  .size(24.dp)
+                  .clip(CircleShape)
+                  .background(folderColorFromArgb(normalized))
+                  .border(
+                    width = if (isSel) 2.5.dp else 1.dp,
+                    color = if (isSel) Color.White else colors.border.copy(alpha = 0.45f),
+                    shape = CircleShape,
+                  )
+                  .clickable {
+                    useCustomColor = false
+                    selectedDirectColorArgb = normalized
+                  }
+                  .testTag("folder_stylus_swatch_$idx"),
+            )
+          }
         }
       }
 
@@ -2302,12 +2561,31 @@ private fun CreateFolderModalDialog(
               .background(colors.surfaceVariant)
               .padding(horizontal = 12.dp, vertical = 10.dp),
         ) {
-          Text(
-            text = "Hue",
-            color = colors.textSecondary,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Medium,
-          )
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Text(
+              text = "Hue (${customHue.toInt()}°)",
+              color = colors.textSecondary,
+              fontSize = 11.sp,
+              fontWeight = FontWeight.Medium,
+            )
+            Text(
+              text = "+ Save to Stylus Palette",
+              color = colors.accentBlue,
+              fontSize = 10.5.sp,
+              fontWeight = FontWeight.Bold,
+              modifier =
+                Modifier
+                  .clip(RoundedCornerShape(6.dp))
+                  .clickable {
+                    onAddCustomColorToStylusPalette(folderColorFromArgb(customColorArgb))
+                  }
+                  .padding(horizontal = 6.dp, vertical = 2.dp),
+            )
+          }
           Slider(
             value = customHue,
             onValueChange = { customHue = it },
@@ -2317,11 +2595,11 @@ private fun CreateFolderModalDialog(
                 thumbColor = folderColorFromArgb(customColorArgb),
                 activeTrackColor = folderColorFromArgb(customColorArgb),
               ),
-            modifier = Modifier.height(28.dp).testTag("folder_custom_hue_slider"),
+            modifier = Modifier.height(26.dp).testTag("folder_custom_hue_slider"),
           )
-          Spacer(modifier = Modifier.height(4.dp))
+          Spacer(modifier = Modifier.height(2.dp))
           Text(
-            text = "Saturation",
+            text = "Saturation (${(customSaturation * 100).toInt()}%)",
             color = colors.textSecondary,
             fontSize = 11.sp,
             fontWeight = FontWeight.Medium,
@@ -2329,13 +2607,31 @@ private fun CreateFolderModalDialog(
           Slider(
             value = customSaturation,
             onValueChange = { customSaturation = it },
-            valueRange = 0.2f..1f,
+            valueRange = 0.15f..1f,
             colors =
               SliderDefaults.colors(
                 thumbColor = folderColorFromArgb(customColorArgb),
                 activeTrackColor = folderColorFromArgb(customColorArgb),
               ),
-            modifier = Modifier.height(28.dp).testTag("folder_custom_saturation_slider"),
+            modifier = Modifier.height(26.dp).testTag("folder_custom_saturation_slider"),
+          )
+          Spacer(modifier = Modifier.height(2.dp))
+          Text(
+            text = "Brightness (${(customValue * 100).toInt()}%)",
+            color = colors.textSecondary,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium,
+          )
+          Slider(
+            value = customValue,
+            onValueChange = { customValue = it },
+            valueRange = 0.25f..1f,
+            colors =
+              SliderDefaults.colors(
+                thumbColor = folderColorFromArgb(customColorArgb),
+                activeTrackColor = folderColorFromArgb(customColorArgb),
+              ),
+            modifier = Modifier.height(26.dp).testTag("folder_custom_brightness_slider"),
           )
         }
       }
@@ -2369,7 +2665,12 @@ private fun CreateFolderModalDialog(
               .padding(horizontal = 16.dp, vertical = 8.dp)
               .testTag("confirm_create_folder_button"),
         ) {
-          Text("Create Folder", color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+          Text(
+            text = if (isColorEditMode) "Apply Folder Color" else "Create Folder",
+            color = Color.White,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+          )
         }
       }
     }

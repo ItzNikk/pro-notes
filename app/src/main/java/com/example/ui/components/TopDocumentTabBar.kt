@@ -25,6 +25,11 @@ import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,14 +59,38 @@ fun TopDocumentTabBar(
   onTabClose: (String) -> Unit,
   onNewTabClick: () -> Unit,
   onToggleReadOnly: () -> Unit,
+  onTripleTapShowcase: () -> Unit = {},
   modifier: Modifier = Modifier,
 ) {
+  var tapCount by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
+  var lastTapMs by androidx.compose.runtime.remember { androidx.compose.runtime.mutableLongStateOf(0L) }
+
+  fun registerPotentialTripleTap() {
+    val now = System.currentTimeMillis()
+    if (now - lastTapMs <= 520L) {
+      tapCount += 1
+    } else {
+      tapCount = 1
+    }
+    lastTapMs = now
+    if (tapCount >= 3) {
+      tapCount = 0
+      onTripleTapShowcase()
+    }
+  }
+
   Row(
     modifier =
       modifier
         .fillMaxWidth()
         .height(38.dp)
         .background(TopTabBarBg)
+        .clickable(
+          interactionSource = androidx.compose.runtime.remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+          indication = null,
+        ) {
+          registerPotentialTripleTap()
+        }
         .padding(horizontal = 6.dp),
     verticalAlignment = Alignment.CenterVertically,
   ) {
@@ -73,7 +102,10 @@ fun TopDocumentTabBar(
           .size(34.dp)
           .clip(RoundedCornerShape(topStart = 8.dp, topEnd = 8.dp))
           .background(if (isHomeActive) Color(0xFF1E1F22) else Color.Transparent)
-          .clickable(onClick = onHomeClick)
+          .clickable {
+            registerPotentialTripleTap()
+            onHomeClick()
+          }
           .testTag("top_home_tab_button"),
       contentAlignment = Alignment.Center,
     ) {

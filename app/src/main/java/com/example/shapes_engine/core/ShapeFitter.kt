@@ -26,8 +26,11 @@ class ShapeFitter {
         return when (classification.shapeType) {
             ShapeType.LINE -> fitLine(classification, style)
             ShapeType.ARROW -> fitArrow(classification, style)
+            ShapeType.ANGLE_BRACKET -> fitAngleBracket(classification, style)
+            ShapeType.CURVE -> fitCurve(classification, style)
             ShapeType.RECTANGLE -> fitRectangle(classification, style, isSquare = false)
             ShapeType.SQUARE -> fitRectangle(classification, style, isSquare = true)
+            ShapeType.DIAMOND -> fitDiamond(classification, style)
             ShapeType.CIRCLE -> fitCircle(classification, style)
             ShapeType.ELLIPSE -> fitEllipse(classification, style)
             ShapeType.TRIANGLE -> fitTriangle(classification, style)
@@ -127,6 +130,137 @@ class ShapeFitter {
             center = bbox.center,
             rotationRad = unitShaft.angle(),
             controlPoints = listOf(start, tip, wing1, wing2)
+        )
+    }
+
+    private fun pointToSegmentDistance(p: Point2D, a: Point2D, b: Point2D): Float {
+        val ab = b - a
+        val lenSq = ab.lengthSquared()
+        if (lenSq < 1e-6f) return p.distanceTo(a)
+        val t = (((p - a).dot(ab)) / lenSq).coerceIn(0f, 1f)
+        val proj = a + ab * t
+        return p.distanceTo(proj)
+    }
+
+    // 2B. ANGLE BRACKET / CHEVRON (<, >, ^, V, L) FITTING
+    private fun fitAngleBracket(
+        classification: ShapeClassificationResult,
+        style: ShapeStyle
+    ): RecognizedShape {
+        val points = classification.resampledPoints
+        val corners = classification.detectedCorners
+        val start = points.first()
+        val end = points.last()
+
+        val vertex = if (corners.size >= 3) {
+            corners.subList(1, corners.size - 1).maxByOrNull { c: Point2D ->
+                pointToSegmentDistance(c, start, end)
+            } ?: points[points.size / 2]
+        } else {
+            points.maxByOrNull { p: Point2D -> pointToSegmentDistance(p, start, end) } ?: points[points.size / 2]
+        }
+
+        // Symmetrize <, >, ^, V chevrons when start and end align horizontally or vertically
+        val chordDx = abs(end.x - start.x)
+        val chordDy = abs(end.y - start.y)
+        val snappedStart: Point2D
+        val snappedEnd: Point2D
+        val snappedVertex: Point2D
+
+        if (chordDy > chordDx * 1.6f && abs(vertex.x - (start.x + end.x) * 0.5f) > chordDy * 0.18f) {
+            // Horizontal > or < bracket
+            val baseX = (start.x + end.x) * 0.5f
+            val midY = (start.y + end.y) * 0.5f
+            snappedStart = Point2D(baseX, start.y)
+            snappedEnd = Point2D(baseX, end.y)
+            snappedVertex = Point2D(vertex.x, if (abs(vertex.y - midY) < chordDy * 0.22f) midY else vertex.y)
+        } else if (chordDx > chordDy * 1.6f && abs(vertex.y - (start.y + end.y) * 0.5f) > chordDx * 0.18f) {
+            // Vertical ^ or V chevron
+            val baseY = (start.y + end.y) * 0.5f
+            val midX = (start.x + end.x) * 0.5f
+            snappedStart = Point2D(start.x, baseY)
+            snappedEnd = Point2D(end.x, baseY)
+            snappedVertex = Point2D(if (abs(vertex.x - midX) < chordDx * 0.22f) midX else vertex.x, vertex.y)
+        } else {
+            snappedStart = start
+            snappedEnd = end
+            snappedVertex = vertex
+        }
+
+        val fittedPoints = listOf(snappedStart, snappedVertex, snappedEnd)
+        val bbox = BoundingBox.fromPoints(fittedPoints)
+
+        return RecognizedShape(
+            type = ShapeType.ANGLE_BRACKET,
+            points = fittedPoints,
+            boundingBox = bbox,
+            style = style,
+            confidence = classification.confidence,
+            center = bbox.center,
+            controlPoints = fittedPoints
+        )
+    }
+
+    // 2C. SMOOTH CURVE / ARC FITTING
+    private fun fitCurve(
+        classification: ShapeClassificationResult,
+        style: ShapeStyle
+    ): RecognizedShape {
+        val points = classification.resampledPoints
+        val start = points.first()
+        val end = points.last()
+        val apex = points.maxByOrNull { p: Point2D -> pointToSegmentDistance(p, start, end) } ?: points[points.size / 2]
+        val mid = Point2D((start.x + end.x) * 0.5f, (start.y + end.y) * 0.5f)
+        // Control point so quadratic Bezier at t=0.5 passes directly through apex
+        val ctrl = Point2D(2f * apex.x - mid.x, 2f * apex.y - mid.y)
+
+        val steps = 32
+        val fittedPoints = ArrayList<Point2D>(steps + 1)
+        for (i in 0..steps) {
+            val t = i.toFloat() / steps.toFloat()
+            val u = 1f - t
+            val bx = u * u * start.x + 2f * u * t * ctrl.x + t * t * end.x
+            val by = u * u * start.y + 2f * u * t * ctrl.y + t * t * end.y
+            fittedPoints.add(Point2D(bx, by))
+        }
+        val bbox = BoundingBox.fromPoints(fittedPoints)
+
+        return RecognizedShape(
+            type = ShapeType.CURVE,
+            points = fittedPoints,
+            boundingBox = bbox,
+            style = style,
+            confidence = classification.confidence,
+            center = bbox.center,
+            controlPoints = listOf(start, apex, end)
+        )
+    }
+
+    // 2D. DIAMOND / RHOMBUS FITTING
+    private fun fitDiamond(
+        classification: ShapeClassificationResult,
+        style: ShapeStyle
+    ): RecognizedShape {
+        val bbox = classification.boundingBox
+        val center = bbox.center
+        val halfW = max(bbox.width * 0.5f, 14f)
+        val halfH = max(bbox.height * 0.5f, 14f)
+
+        val top = Point2D(center.x, center.y - halfH)
+        val right = Point2D(center.x + halfW, center.y)
+        val bottom = Point2D(center.x, center.y + halfH)
+        val left = Point2D(center.x - halfW, center.y)
+        val fittedPoints = listOf(top, right, bottom, left, top)
+        val fittedBbox = BoundingBox.fromPoints(fittedPoints)
+
+        return RecognizedShape(
+            type = ShapeType.DIAMOND,
+            points = fittedPoints,
+            boundingBox = fittedBbox,
+            style = style,
+            confidence = classification.confidence,
+            center = center,
+            controlPoints = listOf(top, right, bottom, left)
         )
     }
 

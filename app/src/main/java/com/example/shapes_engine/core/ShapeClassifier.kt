@@ -50,18 +50,25 @@ class ShapeClassifier {
         val bbox = BoundingBox.fromPoints(resampled)
         val diag = max(bbox.diagonal, 1f)
 
-        // 1. Open vs Closed determination
+        // 1. Open vs Closed determination (trim overshoot first so overshot circles close cleanly)
         val startPt = resampled.first()
         val endPt = resampled.last()
         val endpointGap = startPt.distanceTo(endPt)
         val closureRatio = endpointGap / diag
 
-        val isClosed = closureRatio < 0.22f
+        val trimmed = StrokeResampler.trimClosureOvershoot(resampled, diag)
+        val trimmedGap = trimmed.first().distanceTo(trimmed.last())
+        val trimmedClosureRatio = trimmedGap / diag
+        val totalArcLen = StrokeResampler.computeTotalArcLength(resampled)
+
+        val isClosed =
+            closureRatio < 0.34f ||
+                trimmedClosureRatio < 0.36f ||
+                (totalArcLen >= 2.15f * diag && trimmedClosureRatio < 0.46f)
 
         return if (!isClosed) {
             classifyOpenStroke(resampled, bbox, diag)
         } else {
-            val trimmed = StrokeResampler.trimClosureOvershoot(resampled, diag)
             val trimmedBbox = BoundingBox.fromPoints(trimmed)
             classifyClosedStroke(trimmed, trimmedBbox, max(trimmedBbox.diagonal, 1f))
         }
@@ -95,25 +102,116 @@ class ShapeClassifier {
             )
         }
 
-        // 2. Check Straight Line
+        // 2. Check Straight Line first if very straight
         var maxDev = 0f
-        for (p in points) {
-            val d = PolygonSimplifier.perpendicularDistanceToSegment(p, startPt, endPt)
-            if (d > maxDev) maxDev = d
+        var apexIdx = 0
+        for (i in points.indices) {
+            val d = PolygonSimplifier.perpendicularDistanceToSegment(points[i], startPt, endPt)
+            if (d > maxDev) {
+                maxDev = d
+                apexIdx = i
+            }
         }
         val maxDevRatio = maxDev / diag
 
-        val isStraightLine = (straightness >= 0.90f && maxDevRatio <= 0.08f) || (straightness >= 0.94f)
-        val confidence = (straightness * (1f - maxDevRatio * 3f)).coerceIn(0.5f, 1f)
+        val isStraightLine = (straightness >= 0.91f && maxDevRatio <= 0.075f) || (straightness >= 0.95f)
+        if (isStraightLine) {
+            val confidence = (straightness * (1f - maxDevRatio * 3f)).coerceIn(0.6f, 1f)
+            return ShapeClassificationResult(
+                shapeType = ShapeType.LINE,
+                confidence = confidence,
+                isClosed = false,
+                resampledPoints = points,
+                detectedCorners = listOf(startPt, endPt),
+                boundingBox = bbox
+            )
+        }
+
+        // 3. Check Angle Bracket / Chevron (>, <, ^, V, L)
+        val angleCorners = checkAngleBracketStroke(points, apexIdx, maxDevRatio, totalArcLen, diag)
+        if (angleCorners != null) {
+            return ShapeClassificationResult(
+                shapeType = ShapeType.ANGLE_BRACKET,
+                confidence = 0.94f,
+                isClosed = false,
+                resampledPoints = points,
+                detectedCorners = angleCorners,
+                boundingBox = bbox
+            )
+        }
+
+        // 4. Smooth Open Arc Curve
+        if (maxDevRatio > 0.08f) {
+            val midPt = points[apexIdx.coerceIn(1, (points.size - 2).coerceAtLeast(1))]
+            return ShapeClassificationResult(
+                shapeType = ShapeType.CURVE,
+                confidence = 0.89f,
+                isClosed = false,
+                resampledPoints = points,
+                detectedCorners = listOf(startPt, midPt, endPt),
+                boundingBox = bbox
+            )
+        }
 
         return ShapeClassificationResult(
             shapeType = ShapeType.LINE,
-            confidence = if (isStraightLine) confidence else 0.70f,
+            confidence = 0.75f,
             isClosed = false,
             resampledPoints = points,
             detectedCorners = listOf(startPt, endPt),
             boundingBox = bbox
         )
+    }
+
+    /**
+     * Detects a 2-segment sharp open angle bracket / chevron (`>`, `<`, `^`, `V`, `L`).
+     * Returns the 3 vertices `[start, apex, end]` when both legs are straight and meet at a clear corner.
+     */
+    private fun checkAngleBracketStroke(
+        points: List<Point2D>,
+        apexIdx: Int,
+        maxDevRatio: Float,
+        totalArcLen: Float,
+        diag: Float
+    ): List<Point2D>? {
+        if (points.size < 5 || maxDevRatio < 0.11f) return null
+        if (apexIdx < 2 || apexIdx > points.size - 3) return null
+
+        val startPt = points.first()
+        val apexPt = points[apexIdx]
+        val endPt = points.last()
+
+        val leg1Len = startPt.distanceTo(apexPt)
+        val leg2Len = apexPt.distanceTo(endPt)
+        if (leg1Len < 0.18f * totalArcLen || leg2Len < 0.18f * totalArcLen) return null
+
+        // Compute interior angle between the two legs at apexPt
+        val v1 = (startPt - apexPt).normalized()
+        val v2 = (endPt - apexPt).normalized()
+        val dot = v1.dot(v2).coerceIn(-1f, 1f)
+        val interiorAngleDeg = Math.toDegrees(acos(dot).toDouble()).toFloat()
+        if (interiorAngleDeg !in 20f..152f) return null
+
+        // Measure straightness of Leg 1 (start -> apex) and Leg 2 (apex -> end)
+        var maxLeg1Dev = 0f
+        for (i in 0..apexIdx) {
+            val d = PolygonSimplifier.perpendicularDistanceToSegment(points[i], startPt, apexPt)
+            if (d > maxLeg1Dev) maxLeg1Dev = d
+        }
+        var maxLeg2Dev = 0f
+        for (i in apexIdx until points.size) {
+            val d = PolygonSimplifier.perpendicularDistanceToSegment(points[i], apexPt, endPt)
+            if (d > maxLeg2Dev) maxLeg2Dev = d
+        }
+
+        val leg1Wobble = maxLeg1Dev / max(leg1Len, 1f)
+        val leg2Wobble = maxLeg2Dev / max(leg2Len, 1f)
+
+        // For an angle bracket (>, <, ^, V), both legs are relatively straight compared to the sharp corner
+        if (leg1Wobble <= 0.14f && leg2Wobble <= 0.14f && (maxLeg1Dev + maxLeg2Dev) * 0.5f < maxDevRatio * diag * 0.48f) {
+            return listOf(startPt, apexPt, endPt)
+        }
+        return null
     }
 
     private fun checkArrowStroke(
@@ -221,7 +319,7 @@ class ShapeClassifier {
             )
         }
 
-        // 3. Polygon vs Smooth Curve (Circle / Ellipse)
+        // 3. Early Smooth Circle / Ellipse check before polygon simplification can quantize a circle
         val polyEps = 0.045f * diag
         val rawCorners = PolygonSimplifier.simplify(points, polyEps, isClosed = true)
         val filteredCorners = PolygonSimplifier.filterCollinearVertices(rawCorners, minTurnAngleDeg = 16f, isClosed = true)
@@ -235,8 +333,32 @@ class ShapeClassifier {
 
         val edgeWobble = CurvatureAnalyzer.computeEdgeWobble(points, mergedCorners)
 
+        // Hand-drawn circles have low radial variation and high compactness, and curved edges (higher wobble vs chords)
+        val isSmoothCircularLoop =
+            (radiusVariationRatio <= 0.165f && compactness >= 0.76f && (edgeWobble > 0.044f || uniqueCornerCount >= 5)) ||
+                (radiusVariationRatio <= 0.125f && compactness >= 0.80f)
+
+        if (isSmoothCircularLoop) {
+            val circleOrOval = if (covAspectRatio <= 1.28f && bbox.squareAspectRatio >= 0.74f) {
+                ShapeType.CIRCLE
+            } else {
+                ShapeType.ELLIPSE
+            }
+            return ShapeClassificationResult(
+                shapeType = circleOrOval,
+                confidence = 0.96f,
+                isClosed = true,
+                resampledPoints = points,
+                detectedCorners = emptyList(),
+                boundingBox = bbox,
+                compactness = compactness,
+                covarianceAspectRatio = covAspectRatio,
+                edgeWobble = edgeWobble
+            )
+        }
+
         // Check if vertices form straight polygon edges
-        val isPolygonCandidate = (edgeWobble <= 0.075f && uniqueCornerCount in 3..6)
+        val isPolygonCandidate = (edgeWobble <= 0.072f && uniqueCornerCount in 3..6)
 
         if (isPolygonCandidate) {
             when (uniqueCornerCount) {
@@ -320,16 +442,8 @@ class ShapeClassifier {
             )
         }
 
-        if (uniqueCornerCount == 4 && compactness in 0.60f..0.85f && edgeWobble <= 0.090f) {
-            val side1 = if (mergedCorners.size >= 4) {
-                (mergedCorners[0].distanceTo(mergedCorners[1]) + mergedCorners[2].distanceTo(mergedCorners[3])) * 0.5f
-            } else bbox.width
-            val side2 = if (mergedCorners.size >= 4) {
-                (mergedCorners[1].distanceTo(mergedCorners[2]) + mergedCorners[3].distanceTo(mergedCorners[0])) * 0.5f
-            } else bbox.height
-
-            val edgeAspect = if (max(side1, side2) > 1e-4f) min(side1, side2) / max(side1, side2) else 1f
-            val shapeType = if (edgeAspect >= 0.88f) ShapeType.SQUARE else ShapeType.RECTANGLE
+        if (uniqueCornerCount == 4 && compactness in 0.56f..0.84f && edgeWobble <= 0.082f) {
+            val shapeType = classifyFourCornerQuad(mergedCorners, bbox)
             return ShapeClassificationResult(
                 shapeType = shapeType,
                 confidence = 0.90f,
@@ -343,7 +457,7 @@ class ShapeClassifier {
             )
         }
 
-        if (uniqueCornerCount == 5 && edgeWobble <= 0.090f) {
+        if (uniqueCornerCount == 5 && edgeWobble <= 0.078f && compactness < 0.82f) {
             return ShapeClassificationResult(
                 shapeType = ShapeType.PENTAGON,
                 confidence = 0.88f,
@@ -357,7 +471,7 @@ class ShapeClassifier {
             )
         }
 
-        if (uniqueCornerCount == 6 && edgeWobble <= 0.090f) {
+        if (uniqueCornerCount == 6 && edgeWobble <= 0.078f && compactness < 0.83f) {
             return ShapeClassificationResult(
                 shapeType = ShapeType.HEXAGON,
                 confidence = 0.88f,
@@ -372,8 +486,8 @@ class ShapeClassifier {
         }
 
         // 4. Smooth Curves: Circle vs Ellipse
-        // Aspect ratio threshold: aspect ratio <= 1.18 -> CIRCLE, else ELLIPSE
-        val shapeType = if (covAspectRatio <= 1.18f && bbox.squareAspectRatio >= 0.85f) {
+        // Aspect ratio threshold: aspect ratio <= 1.28 -> CIRCLE, else ELLIPSE
+        val shapeType = if (covAspectRatio <= 1.28f && bbox.squareAspectRatio >= 0.74f) {
             ShapeType.CIRCLE
         } else {
             ShapeType.ELLIPSE
@@ -390,5 +504,43 @@ class ShapeClassifier {
             covarianceAspectRatio = covAspectRatio,
             edgeWobble = edgeWobble
         )
+    }
+
+    /**
+     * Distinguishes a rotated DIAMOND (vertices near top/right/bottom/left midpoints of bounding box)
+     * from an axis-aligned SQUARE or RECTANGLE.
+     */
+    private fun classifyFourCornerQuad(corners: List<Point2D>, bbox: BoundingBox): ShapeType {
+        if (corners.size < 4) return ShapeType.RECTANGLE
+        val cx = bbox.center.x
+        val cy = bbox.center.y
+        val diamondTargets = listOf(
+            Point2D(cx, bbox.minY),
+            Point2D(bbox.maxX, cy),
+            Point2D(cx, bbox.maxY),
+            Point2D(bbox.minX, cy)
+        )
+        val rectTargets = listOf(
+            Point2D(bbox.minX, bbox.minY),
+            Point2D(bbox.maxX, bbox.minY),
+            Point2D(bbox.maxX, bbox.maxY),
+            Point2D(bbox.minX, bbox.maxY)
+        )
+        val v4 = corners.take(4)
+        val diamondDist = diamondTargets.sumOf { target ->
+            v4.minOf { c -> c.distanceTo(target).toDouble() }
+        }.toFloat()
+        val rectDist = rectTargets.sumOf { target ->
+            v4.minOf { c -> c.distanceTo(target).toDouble() }
+        }.toFloat()
+
+        if (diamondDist < rectDist * 0.78f) {
+            return ShapeType.DIAMOND
+        }
+
+        val side1 = (corners[0].distanceTo(corners[1]) + corners[2].distanceTo(corners[3])) * 0.5f
+        val side2 = (corners[1].distanceTo(corners[2]) + corners[3].distanceTo(corners[0])) * 0.5f
+        val edgeAspect = if (max(side1, side2) > 1e-4f) min(side1, side2) / max(side1, side2) else 1f
+        return if (edgeAspect >= 0.88f) ShapeType.SQUARE else ShapeType.RECTANGLE
     }
 }

@@ -30,6 +30,7 @@ import kotlin.math.sin
 fun PrimaryToolCustomIcon(
   tool: PrimaryTool,
   tint: Color,
+  accentColor: Color? = null,
   modifier: Modifier = Modifier,
 ) {
   Canvas(modifier = modifier) {
@@ -37,6 +38,7 @@ fun PrimaryToolCustomIcon(
     val h = size.height
     val strokeW = (w * 0.082f).coerceAtLeast(2.1f)
     val stroke = Stroke(width = strokeW, cap = StrokeCap.Round, join = StrokeJoin.Round)
+    val liveAccent = accentColor ?: tint
 
     when (tool) {
       PrimaryTool.LASSO -> {
@@ -68,8 +70,17 @@ fun PrimaryToolCustomIcon(
       }
 
       PrimaryTool.WRITING_TOOLS -> {
-        // 1:1 Official Goodnotes "Writing Tools" Icon (IMG_0531 Row 1):
-        // Angled pen nib pointing to bottom-left + signature cursive loop curl ('e' loop) at bottom
+        // 1:1 Official Goodnotes "Writing Tools" Icon with live selectedColor nib & ink curl preview
+        val nibTip =
+          Path().apply {
+            moveTo(w * 0.20f, h * 0.68f)
+            lineTo(w * 0.30f, h * 0.38f)
+            lineTo(w * 0.52f, h * 0.60f)
+            close()
+          }
+        if (accentColor != null) {
+          drawPath(path = nibTip, color = liveAccent.copy(alpha = 0.88f))
+        }
         val penBody =
           Path().apply {
             moveTo(w * 0.20f, h * 0.68f)
@@ -87,7 +98,7 @@ fun PrimaryToolCustomIcon(
           end = Offset(w * 0.51f, h * 0.58f),
           strokeWidth = strokeW * 0.85f,
         )
-        // Signature cursive loop curl at bottom-left -> bottom-right (exact from IMG_0531)
+        // Signature cursive loop curl at bottom-left -> bottom-right tinted with live ink color
         val loopPath =
           Path().apply {
             moveTo(w * 0.20f, h * 0.70f)
@@ -95,7 +106,7 @@ fun PrimaryToolCustomIcon(
             cubicTo(w * 0.44f, h * 0.62f, w * 0.28f, h * 0.74f, w * 0.40f, h * 0.84f)
             quadraticTo(w * 0.58f, h * 0.90f, w * 0.84f, h * 0.82f)
           }
-        drawPath(path = loopPath, color = tint, style = stroke)
+        drawPath(path = loopPath, color = liveAccent, style = stroke)
       }
 
       PrimaryTool.ERASER -> {
@@ -127,7 +138,7 @@ fun PrimaryToolCustomIcon(
 
       PrimaryTool.SHAPE -> {
         // 2x2 Grid: Top-left Triangle, Top-right Curved Arrow, Bottom-left Circle, Bottom-right Square
-        // 1) Top-left: Triangle
+        // Live color preview on the shapes
         val tri =
           Path().apply {
             moveTo(w * 0.30f, h * 0.15f)
@@ -135,7 +146,10 @@ fun PrimaryToolCustomIcon(
             lineTo(w * 0.15f, h * 0.43f)
             close()
           }
-        drawPath(path = tri, color = tint, style = stroke)
+        if (accentColor != null) {
+          drawPath(path = tri, color = liveAccent.copy(alpha = 0.45f))
+        }
+        drawPath(path = tri, color = liveAccent, style = stroke)
 
         // 2) Top-right: Curved Arrow (arcs from left to bottom-right with arrowhead)
         val arcArrow =
@@ -144,7 +158,6 @@ fun PrimaryToolCustomIcon(
             quadraticTo(w * 0.78f, h * 0.16f, w * 0.76f, h * 0.42f)
           }
         drawPath(path = arcArrow, color = tint, style = stroke)
-        // Arrowhead at (0.76, 0.42)
         drawLine(
           color = tint,
           start = Offset(w * 0.67f, h * 0.35f),
@@ -161,6 +174,13 @@ fun PrimaryToolCustomIcon(
         )
 
         // 3) Bottom-left: Circle
+        if (accentColor != null) {
+          drawCircle(
+            color = liveAccent.copy(alpha = 0.45f),
+            radius = w * 0.14f,
+            center = Offset(w * 0.30f, h * 0.70f),
+          )
+        }
         drawCircle(
           color = tint,
           radius = w * 0.14f,
@@ -169,8 +189,16 @@ fun PrimaryToolCustomIcon(
         )
 
         // 4) Bottom-right: Square
+        if (accentColor != null) {
+          drawRoundRect(
+            color = liveAccent.copy(alpha = 0.45f),
+            topLeft = Offset(w * 0.56f, h * 0.56f),
+            size = Size(w * 0.27f, h * 0.27f),
+            cornerRadius = CornerRadius(w * 0.04f, w * 0.04f),
+          )
+        }
         drawRoundRect(
-          color = tint,
+          color = liveAccent,
           topLeft = Offset(w * 0.56f, h * 0.56f),
           size = Size(w * 0.27f, h * 0.27f),
           cornerRadius = CornerRadius(w * 0.04f, w * 0.04f),
@@ -179,8 +207,7 @@ fun PrimaryToolCustomIcon(
       }
 
       PrimaryTool.LASER -> {
-        // 1:1 Official Goodnotes "Laser Pointer" Icon (IMG_0531 Row 8):
-        // Angled hollow wand rod from bottom-left to center + starburst of 8 rays around top-right tip
+        // 1:1 Official Goodnotes "Laser Pointer" Icon with live color starburst
         rotate(degrees = -45f, pivot = Offset(w * 0.38f, h * 0.62f)) {
           drawRoundRect(
             color = tint,
@@ -190,16 +217,15 @@ fun PrimaryToolCustomIcon(
             style = stroke,
           )
         }
-        // Starburst center at (0.68, 0.32)
         val cx = w * 0.68f
         val cy = h * 0.32f
-        drawCircle(color = tint, radius = strokeW * 0.85f, center = Offset(cx, cy))
+        drawCircle(color = liveAccent, radius = strokeW * 0.95f, center = Offset(cx, cy))
         for (i in 0 until 8) {
           val angle = Math.toRadians((i * 45).toDouble())
           val r1 = w * 0.12f
           val r2 = w * 0.20f
           drawLine(
-            color = tint,
+            color = liveAccent,
             start = Offset(cx + (r1 * cos(angle)).toFloat(), cy + (r1 * sin(angle)).toFloat()),
             end = Offset(cx + (r2 * cos(angle)).toFloat(), cy + (r2 * sin(angle)).toFloat()),
             strokeWidth = strokeW * 0.8f,
@@ -207,16 +233,93 @@ fun PrimaryToolCustomIcon(
           )
         }
       }
-      else -> {
-        // Fallback for TEXT, IMAGE, ELEMENTS, STICKY_NOTE
+
+      PrimaryTool.TEXT -> {
+        // Crisp "T" inside a bounding box with live color underline accent
+        drawRoundRect(
+          color = tint,
+          topLeft = Offset(w * 0.16f, h * 0.16f),
+          size = Size(w * 0.68f, h * 0.68f),
+          cornerRadius = CornerRadius(w * 0.08f, w * 0.08f),
+          style = stroke,
+        )
+        drawLine(
+          color = liveAccent,
+          start = Offset(w * 0.32f, h * 0.34f),
+          end = Offset(w * 0.68f, h * 0.34f),
+          strokeWidth = strokeW * 1.1f,
+          cap = StrokeCap.Round,
+        )
+        drawLine(
+          color = liveAccent,
+          start = Offset(w * 0.50f, h * 0.34f),
+          end = Offset(w * 0.50f, h * 0.68f),
+          strokeWidth = strokeW * 1.1f,
+          cap = StrokeCap.Round,
+        )
+      }
+
+      PrimaryTool.IMAGE -> {
+        // Photo frame with sun & mountain
+        drawRoundRect(
+          color = tint,
+          topLeft = Offset(w * 0.15f, h * 0.18f),
+          size = Size(w * 0.70f, h * 0.64f),
+          cornerRadius = CornerRadius(w * 0.08f, w * 0.08f),
+          style = stroke,
+        )
+        drawCircle(color = liveAccent, radius = w * 0.07f, center = Offset(w * 0.35f, h * 0.37f))
+        val mtn =
+          Path().apply {
+            moveTo(w * 0.22f, h * 0.74f)
+            lineTo(w * 0.44f, h * 0.50f)
+            lineTo(w * 0.58f, h * 0.64f)
+            lineTo(w * 0.70f, h * 0.52f)
+            lineTo(w * 0.80f, h * 0.74f)
+          }
+        drawPath(path = mtn, color = tint, style = stroke)
+      }
+
+      PrimaryTool.ELEMENTS -> {
+        // Star sticker badge
+        val star = Path()
+        for (i in 0 until 10) {
+          val r = if (i % 2 == 0) w * 0.36f else w * 0.16f
+          val a = -PI / 2.0 + i * (PI / 5.0)
+          val x = w * 0.50f + (r * cos(a)).toFloat()
+          val y = h * 0.52f + (r * sin(a)).toFloat()
+          if (i == 0) star.moveTo(x, y) else star.lineTo(x, y)
+        }
+        star.close()
+        drawPath(path = star, color = tint, style = stroke)
+      }
+
+      PrimaryTool.STICKY_NOTE -> {
+        // Folded corner sticky note
+        val note =
+          Path().apply {
+            moveTo(w * 0.18f, h * 0.18f)
+            lineTo(w * 0.82f, h * 0.18f)
+            lineTo(w * 0.82f, h * 0.62f)
+            lineTo(w * 0.62f, h * 0.82f)
+            lineTo(w * 0.18f, h * 0.82f)
+            close()
+          }
+        drawPath(path = note, color = tint, style = stroke)
+        val fold =
+          Path().apply {
+            moveTo(w * 0.62f, h * 0.82f)
+            lineTo(w * 0.62f, h * 0.62f)
+            lineTo(w * 0.82f, h * 0.62f)
+          }
+        drawPath(path = fold, color = tint, style = stroke)
       }
     }
   }
 }
 
 /**
- * Renders the exact 1:1 official Goodnotes 6 Writing Sub-Tools icons from IMG_0531
- * ("Writing Tools Customization" & Floating Sub-Toolbar in IMG_0526):
+ * Renders the exact 1:1 official Goodnotes 6 Writing Sub-Tools icons with live color preview:
  * 1. Pen
  * 2. Pencil
  * 3. Highlighter
@@ -227,6 +330,7 @@ fun PrimaryToolCustomIcon(
 fun WritingSubToolCustomIcon(
   subTool: WritingSubTool,
   tint: Color,
+  accentColor: Color? = null,
   modifier: Modifier = Modifier,
 ) {
   Canvas(modifier = modifier) {
@@ -234,11 +338,11 @@ fun WritingSubToolCustomIcon(
     val h = size.height
     val strokeW = (w * 0.085f).coerceAtLeast(2.0f)
     val stroke = Stroke(width = strokeW, cap = StrokeCap.Round, join = StrokeJoin.Round)
+    val liveAccent = accentColor ?: tint
 
     when (subTool) {
       WritingSubTool.PEN -> {
-        // 1:1 Official Goodnotes "Pen" Icon (IMG_0531 Right Panel Row 1):
-        // Sharp cone nib pointing to bottom-left + collar + open shaft lines going up-right
+        // Sharp cone nib filled with live selectedColor + collar + open shaft lines
         val cone =
           Path().apply {
             moveTo(w * 0.18f, h * 0.82f)
@@ -246,7 +350,18 @@ fun WritingSubToolCustomIcon(
             lineTo(w * 0.56f, h * 0.66f)
             close()
           }
+        if (accentColor != null) {
+          drawPath(path = cone, color = liveAccent.copy(alpha = 0.88f))
+        }
         drawPath(path = cone, color = tint, style = stroke)
+        // Colored ink tip dot at the very tip
+        if (accentColor != null) {
+          drawCircle(
+            color = liveAccent,
+            radius = strokeW * 0.95f,
+            center = Offset(w * 0.19f, h * 0.81f),
+          )
+        }
         // Shaft lines extending to top-right
         drawLine(
           color = tint,
@@ -265,8 +380,7 @@ fun WritingSubToolCustomIcon(
       }
 
       WritingSubTool.PENCIL -> {
-        // 1:1 Official Goodnotes "Pencil" Icon (IMG_0531 Right Panel Row 2):
-        // Angled pencil with scalloped zig-zag wood collar and dark lead tip
+        // Angled pencil with scalloped zig-zag wood collar and live-colored lead tip
         val cone =
           Path().apply {
             moveTo(w * 0.18f, h * 0.82f)
@@ -274,6 +388,9 @@ fun WritingSubToolCustomIcon(
             lineTo(w * 0.56f, h * 0.68f)
             close()
           }
+        if (accentColor != null) {
+          drawPath(path = cone, color = liveAccent.copy(alpha = 0.72f))
+        }
         drawPath(path = cone, color = tint, style = stroke)
         // Scalloped collar wave between (0.32, 0.44) and (0.56, 0.68)
         val scallop =
@@ -293,10 +410,10 @@ fun WritingSubToolCustomIcon(
           cap = StrokeCap.Round,
         )
         drawLine(
-          color = tint,
+          color = if (accentColor != null) liveAccent else tint,
           start = Offset(w * 0.44f, h * 0.56f),
           end = Offset(w * 0.76f, h * 0.24f),
-          strokeWidth = strokeW * 0.8f,
+          strokeWidth = strokeW * 0.9f,
           cap = StrokeCap.Round,
         )
         drawLine(
@@ -309,8 +426,7 @@ fun WritingSubToolCustomIcon(
       }
 
       WritingSubTool.HIGHLIGHTER -> {
-        // 1:1 Official Goodnotes "Highlighter" Icon (IMG_0531 Right Panel Row 3):
-        // Flared marker collar + angled chisel nib sticking out at bottom-left
+        // Flared marker collar + angled chisel nib filled with live highlighter color
         val nib =
           Path().apply {
             moveTo(w * 0.18f, h * 0.78f)
@@ -319,7 +435,10 @@ fun WritingSubToolCustomIcon(
             lineTo(w * 0.26f, h * 0.84f)
             close()
           }
-        drawPath(path = nib, color = tint, style = stroke)
+        if (accentColor != null) {
+          drawPath(path = nib, color = liveAccent.copy(alpha = 0.92f))
+        }
+        drawPath(path = nib, color = if (accentColor != null) liveAccent else tint, style = stroke)
         // Flared marker body collar
         val body =
           Path().apply {
@@ -329,14 +448,23 @@ fun WritingSubToolCustomIcon(
             lineTo(w * 0.62f, h * 0.16f)
             close()
           }
+        if (accentColor != null) {
+          drawPath(path = body, color = liveAccent.copy(alpha = 0.28f))
+        }
         drawPath(path = body, color = tint, style = stroke)
       }
 
       WritingSubTool.TAPE -> {
-        // 1:1 Official Goodnotes "Tape" Icon (IMG_0531 Right Panel Row 4):
-        // Circular tape roll with concentric inner core + horizontal tape strip at bottom-left
+        // Circular tape roll with concentric inner core + horizontal tape strip filled with live color
         val cx = w * 0.56f
         val cy = h * 0.48f
+        if (accentColor != null) {
+          drawCircle(
+            color = liveAccent.copy(alpha = 0.42f),
+            radius = w * 0.28f,
+            center = Offset(cx, cy),
+          )
+        }
         drawCircle(
           color = tint,
           radius = w * 0.28f,
@@ -356,13 +484,23 @@ fun WritingSubToolCustomIcon(
             lineTo(w * 0.16f, cy + w * 0.28f)
             lineTo(w * 0.22f, cy + w * 0.12f)
             lineTo(cx - w * 0.24f, cy + w * 0.12f)
+            close()
           }
+        if (accentColor != null) {
+          drawPath(path = strip, color = liveAccent.copy(alpha = 0.88f))
+        }
         drawPath(path = strip, color = tint, style = stroke)
       }
 
       WritingSubTool.DRAW_SHAPE -> {
-        // 1:1 Official Goodnotes "Draw Shape" Icon (IMG_0531 Right Panel Row 5):
-        // Overlapping Circle (top-left) + Triangle with vertex dots (bottom-right)
+        // Overlapping Circle (top-left) + Triangle with vertex dots (bottom-right) in live color
+        if (accentColor != null) {
+          drawCircle(
+            color = liveAccent.copy(alpha = 0.35f),
+            radius = w * 0.23f,
+            center = Offset(w * 0.38f, h * 0.38f),
+          )
+        }
         drawCircle(
           color = tint,
           radius = w * 0.23f,
@@ -379,12 +517,48 @@ fun WritingSubToolCustomIcon(
             lineTo(v3.x, v3.y)
             close()
           }
-        drawPath(path = tri, color = tint, style = stroke)
+        if (accentColor != null) {
+          drawPath(path = tri, color = liveAccent.copy(alpha = 0.55f))
+        }
+        drawPath(path = tri, color = liveAccent, style = stroke)
         // Small vertex handle dots on the triangle
         val dotR = strokeW * 0.75f
-        drawCircle(color = tint, radius = dotR, center = v1)
-        drawCircle(color = tint, radius = dotR, center = v2)
-        drawCircle(color = tint, radius = dotR, center = v3)
+        drawCircle(color = liveAccent, radius = dotR, center = v1)
+        drawCircle(color = liveAccent, radius = dotR, center = v2)
+        drawCircle(color = liveAccent, radius = dotR, center = v3)
+      }
+
+      WritingSubTool.RULER -> {
+        // Angled precision ruler with millimeter ticks and live color edge highlight
+        rotate(degrees = -35f, pivot = Offset(w * 0.50f, h * 0.50f)) {
+          if (accentColor != null) {
+            drawRoundRect(
+              color = liveAccent.copy(alpha = 0.28f),
+              topLeft = Offset(w * 0.12f, h * 0.34f),
+              size = Size(w * 0.76f, h * 0.32f),
+              cornerRadius = CornerRadius(w * 0.06f, w * 0.06f),
+            )
+          }
+          drawRoundRect(
+            color = tint,
+            topLeft = Offset(w * 0.12f, h * 0.34f),
+            size = Size(w * 0.76f, h * 0.32f),
+            cornerRadius = CornerRadius(w * 0.06f, w * 0.06f),
+            style = stroke,
+          )
+          // Graduation tick marks along the top edge of the ruler
+          for (i in 1..5) {
+            val tx = w * (0.14f + i * 0.12f)
+            val tickLen = if (i % 2 == 1) h * 0.14f else h * 0.09f
+            drawLine(
+              color = if (i % 2 == 1) liveAccent else tint,
+              start = Offset(tx, h * 0.34f),
+              end = Offset(tx, h * 0.34f + tickLen),
+              strokeWidth = strokeW * 0.75f,
+              cap = StrokeCap.Round,
+            )
+          }
+        }
       }
     }
   }
@@ -811,6 +985,14 @@ fun ShapeKindPreviewIcon(
         drawLine(tint, Offset(w * 0.56f, h * 0.22f), Offset(w * 0.80f, h * 0.22f), strokeWidth = strokeW, cap = StrokeCap.Round)
         drawLine(tint, Offset(w * 0.80f, h * 0.22f), Offset(w * 0.80f, h * 0.46f), strokeWidth = strokeW, cap = StrokeCap.Round)
       }
+      ShapeKind.ANGLE_BRACKET -> {
+        val p = Path().apply {
+          moveTo(w * 0.26f, h * 0.18f)
+          lineTo(w * 0.76f, h * 0.50f)
+          lineTo(w * 0.26f, h * 0.82f)
+        }
+        drawPath(p, tint, style = stroke)
+      }
       ShapeKind.CURVE -> {
         val p = Path().apply {
           moveTo(w * 0.16f, h * 0.74f)
@@ -878,6 +1060,20 @@ fun ShapeKindPreviewIcon(
           if (i == 0) p.moveTo(x, y) else p.lineTo(x, y)
         }
         p.close()
+        drawPath(p, tint, style = stroke)
+      }
+      ShapeKind.SQUARE -> {
+        val s = minOf(w, h) * 0.65f
+        drawRoundRect(tint, topLeft = Offset((w - s) / 2f, (h - s) / 2f), size = Size(s, s), cornerRadius = CornerRadius(4f, 4f), style = stroke)
+      }
+      ShapeKind.HEART -> {
+        val p = Path().apply {
+          val cx = w * 0.5f
+          moveTo(cx, h * 0.32f)
+          cubicTo(cx - w * 0.45f, h * 0.05f, cx - w * 0.45f, h * 0.60f, cx, h * 0.85f)
+          cubicTo(cx + w * 0.45f, h * 0.60f, cx + w * 0.45f, h * 0.05f, cx, h * 0.32f)
+          close()
+        }
         drawPath(p, tint, style = stroke)
       }
     }

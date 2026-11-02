@@ -818,15 +818,26 @@ fun SettingsScreen(
         }
       }
 
-      // Small muted footer
+      // Small muted footer (Triple-tap to launch Video Showcase)
+      var footerTapCount by remember { mutableStateOf(0) }
+      var footerLastTapMs by remember { mutableStateOf(0L) }
       Text(
-        text = "Pro Notes · Founded by ItzNikk · Play Store Release Edition",
+        text = "Pro Notes · Founded by ItzNikk · Play Store Release Edition (3x Tap for Video Reel)",
         color = colors.textMuted,
         fontSize = 12.sp,
         fontWeight = FontWeight.Normal,
         textAlign = TextAlign.Center,
         modifier = Modifier
           .fillMaxWidth()
+          .clickable {
+            val now = System.currentTimeMillis()
+            footerTapCount = if (now - footerLastTapMs <= 550L) footerTapCount + 1 else 1
+            footerLastTapMs = now
+            if (footerTapCount >= 3) {
+              footerTapCount = 0
+              onOpenThankYouScreen()
+            }
+          }
           .padding(top = 18.dp, bottom = 2.dp),
       )
     }

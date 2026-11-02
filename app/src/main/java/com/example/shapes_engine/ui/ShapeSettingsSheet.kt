@@ -101,7 +101,7 @@ fun ShapeSettingsContent(
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertAlignment
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
                 text = "Shape Style Settings",
@@ -125,7 +125,7 @@ fun ShapeSettingsContent(
         // Live Preview Row
         Row(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertAlignment,
+            verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             ShapeStylePreviewBox(
@@ -155,7 +155,7 @@ fun ShapeSettingsContent(
                 .background(Color(0xFF22252D))
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertAlignment
+            verticalAlignment = Alignment.CenterVertically
         ) {
             Column {
                 Text(
@@ -195,7 +195,7 @@ fun ShapeSettingsContent(
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertAlignment
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     text = "Fill Opacity",

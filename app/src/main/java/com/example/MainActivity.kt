@@ -336,6 +336,10 @@ fun ProNotesAppRoot(
           onRestoreFromTrash = viewModel::moveNotebookToTrash,
           onDeletePermanently = viewModel::deleteNotebookPermanently,
           onOpenSettings = viewModel::openSettingsScreen,
+          stylusQuickSwatches = uiState.quickSwatches,
+          stylusCustomPalette = uiState.customPalette,
+          onAddCustomColorToStylusPalette = viewModel::addCustomColorToPalette,
+          onOpenVideoShowcase = viewModel::openThankYouScreen,
         )
       }
 

@@ -157,8 +157,12 @@ fun PenSettingsPopover(
         val previewStroke =
           when (selectedPenStyle) {
             PenStyle.FOUNTAIN -> strokeWidth * 1.15f
-            PenStyle.BALL -> strokeWidth * 1.25f
+            PenStyle.BALL -> strokeWidth * 1.15f
+            PenStyle.FINELINER -> (strokeWidth * 0.72f).coerceAtLeast(2.2f)
             PenStyle.BRUSH -> strokeWidth * 1.65f
+            PenStyle.CALLIGRAPHY -> strokeWidth * 1.45f
+            PenStyle.MARKER -> strokeWidth * 1.85f
+            PenStyle.NEON_GLOW -> strokeWidth * 1.25f
           }
         val path =
           Path().apply {
@@ -172,13 +176,26 @@ fun PenSettingsPopover(
             StrokePattern.DASHED -> PathEffect.dashPathEffect(floatArrayOf(22f, 14f), 0f)
             StrokePattern.DOTTED -> PathEffect.dashPathEffect(floatArrayOf(6f, 14f), 0f)
           }
+        if (selectedPenStyle == PenStyle.NEON_GLOW) {
+          drawPath(
+            path = path,
+            color = Color(0xFF38BDF8).copy(alpha = 0.35f),
+            style =
+              Stroke(
+                width = (previewStroke * 2.4f).coerceIn(10f, 34f),
+                cap = StrokeCap.Round,
+                join = StrokeJoin.Round,
+                pathEffect = dashEffect,
+              ),
+          )
+        }
         drawPath(
           path = path,
-          color = Color.White,
+          color = if (selectedPenStyle == PenStyle.NEON_GLOW) Color(0xFFE0F2FE) else Color.White,
           style =
             Stroke(
-              width = previewStroke.coerceIn(4f, 18f),
-              cap = StrokeCap.Round,
+              width = previewStroke.coerceIn(2.5f, 20f),
+              cap = if (selectedPenStyle == PenStyle.MARKER || selectedPenStyle == PenStyle.CALLIGRAPHY) StrokeCap.Square else StrokeCap.Round,
               join = StrokeJoin.Round,
               pathEffect = dashEffect,
             ),
@@ -188,9 +205,9 @@ fun PenSettingsPopover(
 
     Spacer(modifier = Modifier.height(10.dp))
 
-    // 3 Pen Style Selector Cards: Fountain Pen | Ball Pen | Brush Pen
+    // 7 Studio Pen Style Selector Cards (Horizontally Scrollable Strip)
     Row(
-      modifier = Modifier.fillMaxWidth(),
+      modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
       PenStyle.entries.forEach { style ->
@@ -198,12 +215,12 @@ fun PenSettingsPopover(
         Column(
           modifier =
             Modifier
-              .weight(1f)
-              .height(56.dp)
+              .width(82.dp)
+              .height(58.dp)
               .clip(RoundedCornerShape(10.dp))
-              .background(if (isSelected) PopoverCardSelected else Color.Transparent)
+              .background(if (isSelected) PopoverCardSelected else Color(0xFF1F222B))
               .clickable { onSelectPenStyle(style) }
-              .padding(vertical = 6.dp)
+              .padding(horizontal = 6.dp, vertical = 6.dp)
               .testTag("pen_style_${style.name.lowercase()}"),
           horizontalAlignment = Alignment.CenterHorizontally,
           verticalArrangement = Arrangement.Center,
@@ -217,8 +234,9 @@ fun PenSettingsPopover(
           Text(
             text = style.title,
             color = if (isSelected) TextPrimaryWhite else TextSecondaryGray,
-            fontSize = 11.sp,
-            fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+            fontSize = 10.sp,
+            maxLines = 1,
+            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
           )
         }
       }
@@ -589,6 +607,69 @@ private fun PenStyleNibIcon(
             quadraticTo(w * 0.72f, h * 0.62f, w * 0.20f, h * 0.80f)
           }
         drawPath(path = brushPath, color = strokeColor, style = Stroke(width = 3f))
+      }
+
+      PenStyle.FINELINER -> {
+        // Needle-point technical fineliner nib
+        drawLine(
+          color = strokeColor,
+          start = Offset(w * 0.22f, h * 0.78f),
+          end = Offset(w * 0.42f, h * 0.58f),
+          strokeWidth = 2.2f,
+          cap = StrokeCap.Round,
+        )
+        val collar =
+          Path().apply {
+            moveTo(w * 0.36f, h * 0.52f)
+            lineTo(w * 0.48f, h * 0.64f)
+            lineTo(w * 0.78f, h * 0.34f)
+            lineTo(w * 0.66f, h * 0.22f)
+            close()
+          }
+        drawPath(path = collar, color = strokeColor, style = Stroke(width = 2.6f))
+      }
+
+      PenStyle.CALLIGRAPHY -> {
+        // 45° Italic Chisel Calligraphy Nib with breather hole
+        val nib =
+          Path().apply {
+            moveTo(w * 0.18f, h * 0.70f)
+            lineTo(w * 0.32f, h * 0.84f)
+            lineTo(w * 0.78f, h * 0.38f)
+            lineTo(w * 0.60f, h * 0.20f)
+            close()
+          }
+        drawPath(path = nib, color = strokeColor, style = Stroke(width = 2.6f))
+        drawCircle(color = strokeColor, radius = w * 0.06f, center = Offset(w * 0.48f, h * 0.52f))
+      }
+
+      PenStyle.MARKER -> {
+        // Bold Studio Chisel Marker
+        val marker =
+          Path().apply {
+            moveTo(w * 0.20f, h * 0.76f)
+            lineTo(w * 0.38f, h * 0.84f)
+            lineTo(w * 0.80f, h * 0.42f)
+            lineTo(w * 0.58f, h * 0.20f)
+            close()
+          }
+        drawPath(path = marker, color = strokeColor)
+      }
+
+      PenStyle.NEON_GLOW -> {
+        // Glowing cyber pen with halo ring
+        drawCircle(
+          color = strokeColor.copy(alpha = 0.32f),
+          radius = w * 0.34f,
+          center = Offset(w * 0.50f, h * 0.50f),
+        )
+        drawLine(
+          color = strokeColor,
+          start = Offset(w * 0.24f, h * 0.76f),
+          end = Offset(w * 0.76f, h * 0.24f),
+          strokeWidth = 3.2f,
+          cap = StrokeCap.Round,
+        )
       }
     }
   }

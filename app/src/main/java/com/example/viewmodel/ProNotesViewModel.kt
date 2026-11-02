@@ -197,6 +197,13 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     )
   private val prefs = application.getSharedPreferences("pronotes_settings_v3", Context.MODE_PRIVATE)
 
+  val shapeSettingsRepo: shapes_engine.persistence.ShapeSettingsRepository =
+    shapes_engine.persistence.DefaultShapeSettingsRepository(
+      shapes_engine.persistence.AndroidShapePreferencesStorage(application)
+    )
+  val shapesEngine: shapes_engine.facade.ShapesEngine =
+    shapes_engine.facade.ShapesEngine(settingsRepository = shapeSettingsRepo)
+
   private val _uiState = MutableStateFlow(loadInitialPreferences())
   val uiState: StateFlow<ProNotesUiState> = _uiState.asStateFlow()
 
@@ -209,6 +216,11 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   }
 
   init {
+    viewModelScope.launch {
+      shapeSettingsRepo.styleFlow.collectLatest { style ->
+        _uiState.update { it.copy(fillShapes = style.fillEnabled) }
+      }
+    }
     viewModelScope.launch {
       repository.allNotebooksFlow.collectLatest { savedNotebooks ->
         _uiState.update { state ->
@@ -1104,8 +1116,16 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
             else ActivePopover.ELEMENTS_PICKER
           else -> ActivePopover.NONE
         }
+      val priorTool =
+        if (tool == PrimaryTool.LASSO && state.primaryTool != PrimaryTool.LASSO) {
+          state.primaryTool
+        } else {
+          state.previousToolBeforeCircleLasso
+        }
       state.copy(
         primaryTool = tool,
+        previousToolBeforeCircleLasso = priorTool,
+        lassoTriggeredFromCircleGesture = if (tool == PrimaryTool.LASSO) true else false,
         activePopover = nextPopover,
         showLassoSelection = if (tool == PrimaryTool.LASSO) state.showLassoSelection else false,
         isLassoResizeMode = if (tool == PrimaryTool.LASSO) state.isLassoResizeMode else false,
@@ -1116,6 +1136,22 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   }
 
   fun selectWritingSubTool(subTool: WritingSubTool) {
+    if (subTool == WritingSubTool.RULER) {
+      _uiState.update { state ->
+        val nextRulerVisible = !state.rulerState.isVisible
+        val activeInkTool =
+          if (state.activeWritingSubTool == WritingSubTool.RULER) WritingSubTool.PEN
+          else state.activeWritingSubTool
+        state.copy(
+          primaryTool = PrimaryTool.WRITING_TOOLS,
+          activeWritingSubTool = activeInkTool,
+          rulerState = state.rulerState.copy(isVisible = nextRulerVisible),
+          activePopover = ActivePopover.NONE,
+          statusToastMessage = if (nextRulerVisible) "Precision Ruler enabled — draw along edge to snap" else "Precision Ruler hidden",
+        )
+      }
+      return
+    }
     _uiState.update { state ->
       val isAlreadySelected =
         state.primaryTool == PrimaryTool.WRITING_TOOLS && state.activeWritingSubTool == subTool
@@ -1470,6 +1506,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
                   val canFill =
                     stroke.shapeKind != ShapeKind.LINE &&
                       stroke.shapeKind != ShapeKind.ARROW &&
+                      stroke.shapeKind != ShapeKind.ANGLE_BRACKET &&
                       stroke.shapeKind != ShapeKind.CURVE
                   stroke.copy(shapeFill = if (canFill) !stroke.shapeFill else false)
                 }
@@ -1542,18 +1579,19 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
    * Inserts a geometric shape stamp onto the current page when selected from the Shapes popover.
    */
   fun insertQuickShape(kind: ShapeKind) {
-    val pts =
-      when (kind) {
-        ShapeKind.LINE, ShapeKind.ARROW -> listOf(Offset(140f, 240f), Offset(340f, 240f))
-        ShapeKind.CURVE -> listOf(Offset(140f, 260f), Offset(240f, 170f), Offset(340f, 260f))
-        else ->
-          listOf(
-            Offset(160f, 180f),
-            Offset(320f, 180f),
-            Offset(320f, 310f),
-            Offset(160f, 310f),
-          )
-      }
+      val pts =
+        when (kind) {
+          ShapeKind.LINE, ShapeKind.ARROW -> listOf(Offset(140f, 240f), Offset(340f, 240f))
+          ShapeKind.ANGLE_BRACKET -> listOf(Offset(160f, 180f), Offset(280f, 245f), Offset(160f, 310f))
+          ShapeKind.CURVE -> listOf(Offset(140f, 260f), Offset(240f, 170f), Offset(340f, 260f))
+          else ->
+            listOf(
+              Offset(160f, 180f),
+              Offset(320f, 180f),
+              Offset(320f, 310f),
+              Offset(160f, 310f),
+            )
+        }
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
       val (nextUndo, nextRedo) = recordHistorySnapshot(state, "Insert ${kind.label}")
@@ -1574,6 +1612,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
             state.fillShapes &&
               kind != ShapeKind.LINE &&
               kind != ShapeKind.ARROW &&
+              kind != ShapeKind.ANGLE_BRACKET &&
               kind != ShapeKind.CURVE,
           shapeControlPoints = handles,
           zIndex = 1,
@@ -1589,7 +1628,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         redoHistory = nextRedo,
         selectedShapeKind = kind,
         lastAutoDetectedShape = kind,
-        activeShapeEditStrokeId = strokeId,
+        activeShapeEditStrokeId = null,
         activePopover = ActivePopover.NONE,
         statusToastMessage = "Inserted ${kind.label}",
       )
@@ -2222,7 +2261,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     val polygon = closedLoopPolygon(loopPoints) ?: return false
     val page = state.notebooks.find { it.id == state.activeTabId }?.currentPage
     val selection = computeLassoSelection(polygon, page, state.lassoFilters)
-    if (selection.totalCount == 0 && state.drawAndHold && !state.showInteractiveTour) return false
+    val inLassoTourStep = state.showInteractiveTour && state.interactiveTourStep == 3
+    if (selection.totalCount == 0 && state.drawAndHold && !inLassoTourStep) return false
     _uiState.update { s ->
       val priorTool =
         if (s.primaryTool == PrimaryTool.LASSO) s.previousToolBeforeCircleLasso else s.primaryTool
@@ -2412,13 +2452,23 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   fun commitLassoChanges() {
     val s = _uiState.value
     persistDocumentAsync(s.notebooks.find { it.id == s.activeTabId })
-    if (s.lassoTriggeredFromCircleGesture) {
-      _uiState.update { state ->
-        state.copy(
-          primaryTool = state.previousToolBeforeCircleLasso,
-          lassoTriggeredFromCircleGesture = false,
-        )
-      }
+    _uiState.update { state ->
+      val restoredTool =
+        if (state.primaryTool == PrimaryTool.LASSO) state.previousToolBeforeCircleLasso
+        else state.primaryTool
+      state.copy(
+        primaryTool = restoredTool,
+        lassoTriggeredFromCircleGesture = false,
+        showLassoSelection = false,
+        isLassoResizeMode = false,
+        isLassoColorMenuOpen = false,
+        lassoLoopPoints = emptyList(),
+        lassoSelectedStrokeIds = emptySet(),
+        lassoSelectedTextBoxIds = emptySet(),
+        lassoSelectedElementIds = emptySet(),
+        lassoSelectedStickyIds = emptySet(),
+        lassoSelectedImageIds = emptySet(),
+      )
     }
   }
 
@@ -2715,6 +2765,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     points: List<Offset>,
     pressures: List<Float> = emptyList(),
     snappedFromHold: Boolean = false,
+    preSnappedShapeKind: ShapeKind? = null,
   ) {
     if (points.size < 2) return
     var savedDoc: NotebookDocument? = null
@@ -2845,6 +2896,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       val finalPoints =
         if (isHighlighter && (state.highlighterStraightLine || snappedFromHold)) {
           densifyPolyline(listOf(points.first(), points.last()), 8f)
+        } else if (snappedFromHold && preSnappedShapeKind != null) {
+          points
         } else {
           smoothPoints(points, state.strokeStabilization)
         }
@@ -2852,20 +2905,45 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       val baseWidth =
         state.thicknessPresets.getOrElse(state.selectedThicknessIndex) { 6.5f }
 
-      val snappedFit = if (isShapeStroke) ShapeSnapper.snap(finalPoints) else null
-      val recognition = if (isShapeStroke) ShapeRecognizer.analyze(finalPoints) else null
+      val currentShapeStyle = shapeSettingsRepo.getStyle()
+      val useAutoRecognize =
+        (state.shapeAutoDetectMode || snappedFromHold || !isExplicitShapeTool) &&
+          preSnappedShapeKind == null
+      val points2D = finalPoints.map { shapes_engine.model.Point2D(it.x, it.y) }
+      val recognizedShape =
+        if (isShapeStroke && useAutoRecognize) shapesEngine.recognizeAndFit(points2D, currentShapeStyle)
+        else null
+
       val detectedShapeKind =
-        if (isShapeStroke) {
-          if (!snappedFromHold && !state.shapeAutoDetectMode) {
-            state.selectedShapeKind
-          } else {
-            recognition?.kind ?: autoDetectShapeKind(finalPoints)
+        if (isShapeStroke && preSnappedShapeKind != null) {
+          preSnappedShapeKind
+        } else if (isShapeStroke && recognizedShape != null) {
+          when (recognizedShape.type) {
+            shapes_engine.model.ShapeType.LINE -> ShapeKind.LINE
+            shapes_engine.model.ShapeType.ARROW -> ShapeKind.ARROW
+            shapes_engine.model.ShapeType.ANGLE_BRACKET -> ShapeKind.ANGLE_BRACKET
+            shapes_engine.model.ShapeType.CURVE -> ShapeKind.CURVE
+            shapes_engine.model.ShapeType.RECTANGLE -> ShapeKind.RECTANGLE
+            shapes_engine.model.ShapeType.SQUARE -> ShapeKind.SQUARE
+            shapes_engine.model.ShapeType.DIAMOND -> ShapeKind.DIAMOND
+            shapes_engine.model.ShapeType.CIRCLE -> ShapeKind.CIRCLE
+            shapes_engine.model.ShapeType.ELLIPSE -> ShapeKind.OVAL
+            shapes_engine.model.ShapeType.TRIANGLE -> ShapeKind.TRIANGLE
+            shapes_engine.model.ShapeType.PENTAGON -> ShapeKind.PENTAGON
+            shapes_engine.model.ShapeType.HEXAGON -> ShapeKind.HEXAGON
+            shapes_engine.model.ShapeType.STAR -> ShapeKind.STAR
+            shapes_engine.model.ShapeType.HEART -> ShapeKind.HEART
           }
+        } else if (isShapeStroke) {
+          state.selectedShapeKind
         } else null
 
       val (geomPoints, controlPts) =
-        if (snappedFit != null && detectedShapeKind != null) {
-          snappedFit to (recognition?.vertices ?: emptyList())
+        if (preSnappedShapeKind != null && isShapeStroke) {
+          densifyPolyline(finalPoints, 7f) to emptyList()
+        } else if (recognizedShape != null && detectedShapeKind != null) {
+          densifyPolyline(recognizedShape.points.map { Offset(it.x, it.y) }, 7f) to
+            recognizedShape.controlPoints.map { Offset(it.x, it.y) }
         } else if (detectedShapeKind != null) {
           buildGeometricShapeWithHandles(finalPoints, detectedShapeKind)
         } else {
@@ -2916,10 +2994,12 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           shapeKind = detectedShapeKind,
           shapeFill =
             isShapeStroke &&
-              state.fillShapes &&
+              currentShapeStyle.fillEnabled &&
               detectedShapeKind != ShapeKind.LINE &&
               detectedShapeKind != ShapeKind.ARROW &&
+              detectedShapeKind != ShapeKind.ANGLE_BRACKET &&
               detectedShapeKind != ShapeKind.CURVE,
+          shapeFillOpacity = currentShapeStyle.fillOpacity,
           shapeControlPoints = controlPts,
           zIndex = if (isHighlighter) -1 else 1,
         )
@@ -2935,7 +3015,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         redoHistory = nextRedo,
         selectedShapeKind = detectedShapeKind ?: state.selectedShapeKind,
         lastAutoDetectedShape = detectedShapeKind ?: state.lastAutoDetectedShape,
-        activeShapeEditStrokeId = if (detectedShapeKind != null) strokeId else null,
+        activeShapeEditStrokeId = null,
       )
     }
     persistDocumentAsync(savedDoc)
@@ -3034,7 +3114,27 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     return false
   }
 
-  fun autoDetectShapeKind(points: List<Offset>): ShapeKind = ShapeRecognizer.recognize(points)
+  fun autoDetectShapeKind(points: List<Offset>): ShapeKind {
+    if (points.size < 2) return ShapeKind.LINE
+    val points2D = points.map { shapes_engine.model.Point2D(it.x, it.y) }
+    val classified = shapesEngine.classifier.classify(points2D)
+    return when (classified.shapeType) {
+      shapes_engine.model.ShapeType.LINE -> ShapeKind.LINE
+      shapes_engine.model.ShapeType.ARROW -> ShapeKind.ARROW
+      shapes_engine.model.ShapeType.ANGLE_BRACKET -> ShapeKind.ANGLE_BRACKET
+      shapes_engine.model.ShapeType.CURVE -> ShapeKind.CURVE
+      shapes_engine.model.ShapeType.RECTANGLE -> ShapeKind.RECTANGLE
+      shapes_engine.model.ShapeType.SQUARE -> ShapeKind.SQUARE
+      shapes_engine.model.ShapeType.DIAMOND -> ShapeKind.DIAMOND
+      shapes_engine.model.ShapeType.CIRCLE -> ShapeKind.CIRCLE
+      shapes_engine.model.ShapeType.ELLIPSE -> ShapeKind.OVAL
+      shapes_engine.model.ShapeType.TRIANGLE -> ShapeKind.TRIANGLE
+      shapes_engine.model.ShapeType.PENTAGON -> ShapeKind.PENTAGON
+      shapes_engine.model.ShapeType.HEXAGON -> ShapeKind.HEXAGON
+      shapes_engine.model.ShapeType.STAR -> ShapeKind.STAR
+      shapes_engine.model.ShapeType.HEART -> ShapeKind.HEART
+    }
+  }
 
   private fun simplifyPolygon(points: List<Offset>, epsilon: Float): List<Offset> {
     if (points.size < 3) return points
@@ -3074,6 +3174,22 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     val handles: List<Offset> =
       when (kind) {
         ShapeKind.LINE, ShapeKind.ARROW -> listOf(points.first(), points.last())
+        ShapeKind.ANGLE_BRACKET -> {
+          val first = points.first()
+          val last = points.last()
+          var apex = Offset(maxX, cy)
+          if (points.size >= 3) {
+            var maxD = -1f
+            for (i in 1 until points.size - 1) {
+              val d = distanceToSegment(points[i], first, last)
+              if (d > maxD) {
+                maxD = d
+                apex = points[i]
+              }
+            }
+          }
+          listOf(first, apex, last)
+        }
         ShapeKind.CURVE -> {
           val mid = points[points.size / 2]
           listOf(points.first(), mid, points.last())
@@ -3144,6 +3260,21 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
             )
           }
         }
+        ShapeKind.SQUARE -> {
+          val s = minOf(rx, ry)
+          listOf(
+            Offset(cx - s, cy - s),
+            Offset(cx + s, cy - s),
+            Offset(cx + s, cy + s),
+            Offset(cx - s, cy + s),
+          )
+        }
+        ShapeKind.HEART -> {
+          listOf(
+            Offset(cx, cy - ry),
+            Offset(cx, cy + ry),
+          )
+        }
       }
 
     val densePoints = rebuildShapeFromControlHandles(handles, kind)
@@ -3156,7 +3287,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   ): List<Offset> {
     if (handles.isEmpty()) return emptyList()
     return when (kind) {
-      ShapeKind.LINE -> densifyPolyline(handles, 8f)
+      ShapeKind.LINE, ShapeKind.ANGLE_BRACKET -> densifyPolyline(handles, 8f)
       ShapeKind.ARROW -> {
         if (handles.size < 2) return handles
         val start = handles.first()
@@ -3206,12 +3337,32 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         }
       }
       ShapeKind.RECTANGLE,
+      ShapeKind.SQUARE,
       ShapeKind.DIAMOND,
       ShapeKind.TRIANGLE,
       ShapeKind.PENTAGON,
       ShapeKind.HEXAGON,
       ShapeKind.STAR -> {
         densifyPolyline(handles + handles.first(), 8f)
+      }
+      ShapeKind.HEART -> {
+        val minX = handles.minOf { it.x }
+        val maxX = handles.maxOf { it.x }
+        val minY = handles.minOf { it.y }
+        val maxY = handles.maxOf { it.y }
+        val cx = (minX + maxX) / 2f
+        val cy = (minY + maxY) / 2f
+        val rx = ((maxX - minX) / 2f).coerceAtLeast(18f)
+        val ry = ((maxY - minY) / 2f).coerceAtLeast(18f)
+        val sampleCount = 48
+        val heartPts = (0..sampleCount).map { idx ->
+          val t = (idx.toDouble() / sampleCount.toDouble()) * 2.0 * PI
+          val sinT = sin(t)
+          val hx = (16.0 * sinT * sinT * sinT).toFloat()
+          val hy = -(13.0 * cos(t) - 5.0 * cos(2.0 * t) - 2.0 * cos(3.0 * t) - cos(4.0 * t)).toFloat()
+          Offset(cx + (hx / 16f) * rx, cy + (hy / 16f) * ry)
+        }
+        densifyPolyline(heartPts, 7f)
       }
     }
   }
@@ -4560,6 +4711,86 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
             primaryTool = PrimaryTool.ERASER,
             activePopover = ActivePopover.NONE,
           )
+      }
+    }
+  }
+
+  fun jumpToInteractiveTourStep(step: Int) {
+    applyInteractiveTourStepTool(step.coerceIn(0, 5))
+  }
+
+  /**
+   * Executes a live canvas auto-demonstration for the current Interactive Feature Tour step
+   * so users can either perform the gesture themselves or watch the engine demonstrate it.
+   */
+  fun runTourStepAutoDemo() {
+    val state = _uiState.value
+    val step = state.interactiveTourStep
+    when (step) {
+      0 -> {
+        // Step 1: Expressive calligraphic wave stroke
+        val wavePts =
+          (0..40).map { i ->
+            val t = i / 40f
+            Offset(180f + t * 380f, 340f + kotlin.math.sin(t * kotlin.math.PI * 2.0).toFloat() * 55f)
+          }
+        val wavePr =
+          (0..40).map { i ->
+            val t = i / 40f
+            0.35f + 0.75f * kotlin.math.sin(t * kotlin.math.PI).toFloat()
+          }
+        addStroke(wavePts, wavePr, snappedFromHold = false)
+        _uiState.update { it.copy(statusToastMessage = "Demo: Pressure-sensitive Fountain stroke drawn!") }
+      }
+      1 -> {
+        // Step 2: Snap-to-Shape Perfect Circle
+        val circlePts =
+          (0..48).map { i ->
+            val a = (i / 48.0) * 2.0 * kotlin.math.PI
+            Offset(360f + (110f * kotlin.math.cos(a)).toFloat(), 360f + (110f * kotlin.math.sin(a)).toFloat())
+          }
+        addStroke(circlePts, emptyList(), snappedFromHold = true, preSnappedShapeKind = ShapeKind.CIRCLE)
+        _uiState.update { it.copy(statusToastMessage = "Demo: Circle snapped with Draw & Hold!") }
+      }
+      2 -> {
+        // Step 3: Filled Geometric Star
+        insertQuickShape(ShapeKind.STAR)
+        _uiState.update { it.copy(statusToastMessage = "Demo: Geometric Star stamped onto page!") }
+      }
+      3 -> {
+        // Step 4: Circle-to-Lasso loop around canvas center
+        val loop =
+          (0..36).map { i ->
+            val a = (i / 36.0) * 2.0 * kotlin.math.PI
+            Offset(340f + (180f * kotlin.math.cos(a)).toFloat(), 340f + (150f * kotlin.math.sin(a)).toFloat())
+          }
+        triggerInstantCircleToLasso(loop)
+        _uiState.update { it.copy(statusToastMessage = "Demo: Circle-to-Lasso selection activated!") }
+      }
+      4 -> {
+        // Step 5: Study Tape & Neon Glow highlight
+        val tape =
+          StudyTapeItem(
+            start = Offset(180f, 460f),
+            end = Offset(520f, 460f),
+            color = state.selectedColor,
+            thickness = 38f,
+            isRevealed = false,
+          )
+        _uiState.update { s ->
+          val (updated, _) = updateCurrentPage(s) { p -> p.copy(studyTapes = p.studyTapes + tape) }
+          s.copy(
+            notebooks = updated,
+            statusToastMessage = "Demo: Study Tape placed — tap tape to reveal/hide!",
+          )
+        }
+      }
+      else -> {
+        // Step 6: Precision Erase demo
+        beginEraseGesture()
+        eraseAtPoints(listOf(Offset(340f, 340f), Offset(360f, 360f), Offset(380f, 350f)))
+        endEraseGesture()
+        _uiState.update { it.copy(statusToastMessage = "Demo: Precision Eraser gesture complete!") }
       }
     }
   }

@@ -1,6 +1,8 @@
 package com.example.ui.screens
 
+import android.net.Uri
 import android.view.MotionEvent
+import android.widget.VideoView
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -178,7 +180,10 @@ import com.example.ui.components.TopDocumentTabBar
 import com.example.ui.components.UndoCurvedArrowIcon
 import com.example.ui.components.WritingSubToolCustomIcon
 import com.example.ui.components.ZoomWindowPanel
+import com.example.ui.components.InteractiveRulerOverlay
 import com.example.ui.components.drawPaperTemplateLines
+import androidx.compose.ui.viewinterop.AndroidView
+import com.example.R
 import com.example.ui.theme.ActiveToolIconDark
 import com.example.ui.theme.ActiveToolPill
 import com.example.ui.theme.CanvasOuterGray
@@ -198,6 +203,7 @@ import com.example.ui.theme.TextPrimaryWhite
 import com.example.ui.theme.TextSecondaryGray
 import com.example.ui.theme.ToolbarIconLight
 import com.example.ui.theme.ToolbarNavy
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -361,7 +367,7 @@ fun EditorScreen(
   val onAdvanceZoomBox: (Float, Float) -> Unit = viewModel::advanceZoomTargetBox
   val onAddLaserTrail: (List<Offset>) -> Unit = viewModel::addLaserTrail
   val onPruneExpiredLaserTrails: () -> Unit = viewModel::pruneExpiredLaserTrails
-  val onAddStroke: (List<Offset>, List<Float>, Boolean) -> Unit = viewModel::addStroke
+  val onAddStroke: (List<Offset>, List<Float>, Boolean, ShapeKind?) -> Unit = viewModel::addStroke
   val onTriggerInstantCircleToLasso: (List<Offset>) -> Boolean = viewModel::triggerInstantCircleToLasso
   val onTryConvertCircleStrokeToLassoAtHold: (Offset) -> Boolean = viewModel::tryConvertDrawnCircleStrokeToLassoAtHold
   val onBeginEraseGesture: () -> Unit = viewModel::beginEraseGesture
@@ -407,6 +413,9 @@ fun EditorScreen(
   var isDrawingSnappedHold by remember { mutableStateOf(false) }
   var circleLassoHoldProgress by remember { mutableFloatStateOf(0f) }
   var circleLassoHoldCenter by remember { mutableStateOf(Offset.Zero) }
+  var canvasTripleTapCount by remember { mutableIntStateOf(0) }
+  var canvasLastTapTimeMs by remember { mutableLongStateOf(0L) }
+  var canvasLastTapPos by remember { mutableStateOf(Offset.Zero) }
 
   // Erase feedback: cursor ring, ripples where ink was removed, and ink that fades out.
   // eraserActive flips twice per gesture; the cursor position is only read while drawing.
@@ -467,6 +476,7 @@ fun EditorScreen(
         onTabClose = onCloseTab,
         onNewTabClick = onAddNewNotebookTab,
         onToggleReadOnly = onToggleReadOnlyMode,
+        onTripleTapShowcase = viewModel::openThankYouScreen,
       )
 
       // 2. DOCKED MAIN WORKSPACE TOOLBAR (Always docked at top — never overlaps zoomed PDFs)
@@ -474,6 +484,7 @@ fun EditorScreen(
         DockedMainToolbar(
           primaryTool = primaryTool,
           enabledToolbarTools = enabledToolbarTools,
+          selectedColor = selectedColor,
           isBookmarked = currentPage.isBookmarked,
           isWhiteboard = isWhiteboard,
           onlyDrawWithStylus = onlyDrawWithStylus,
@@ -486,6 +497,12 @@ fun EditorScreen(
             if (tool == PrimaryTool.IMAGE) {
               onSelectPrimaryTool(tool)
               onImportImageFromDevice()
+            } else if (tool == PrimaryTool.SHAPE) {
+              if (primaryTool == PrimaryTool.SHAPE) {
+                onTogglePopover(ActivePopover.SHAPE_SETTINGS)
+              } else {
+                onSelectPrimaryTool(tool)
+              }
             } else {
               onSelectPrimaryTool(tool)
             }
@@ -503,6 +520,7 @@ fun EditorScreen(
           onClearPageStrokes = onClearPageStrokes,
           onToggleOnlyDrawWithStylus = { onToggleOnlyDrawWithStylus(!onlyDrawWithStylus) },
           onOpenSettings = onOpenSettings,
+          onStartInteractiveTour = { viewModel.startInteractiveTour() },
         )
       }
 
@@ -549,6 +567,7 @@ fun EditorScreen(
           onToggleAutoDetect = viewModel::setShapeAutoDetectMode,
           onSelectShapeForDraw = viewModel::selectShapeForDirectDraw,
           onToggleFillShapes = { onToggleFillShapes(!fillShapes) },
+          onOpenShapeSettings = { onTogglePopover(ActivePopover.SHAPE_SETTINGS) },
           onStampShape = { onInsertQuickShape(uiState.selectedShapeKind) },
         )
       }
@@ -816,6 +835,7 @@ fun EditorScreen(
                 val leftHandedRef = rememberUpdatedState(leftHandedPosture)
                 val showLassoRef = rememberUpdatedState(showLassoSelection)
                 val eyedropperRef = rememberUpdatedState(isEyedropperActive)
+                val studyTapesRef = rememberUpdatedState(pageData.studyTapes)
 
                 // 4) Interactive Ink, Shape, Lasso, Eyedropper, S Pen & Multi-Touch Zoom Canvas
                 Canvas(
@@ -914,6 +934,32 @@ fun EditorScreen(
                                   (promotedStylusChange.type == PointerType.Eraser ||
                                     hardwareStylusState.isEraserTail)
                             } else {
+                              if (isReadOnlyMode) {
+                                val tapPos = activeDown.position
+                                val hitTape =
+                                  studyTapesRef.value.asReversed().firstOrNull { tape ->
+                                    val seg = tape.end - tape.start
+                                    val lenSq = seg.x * seg.x + seg.y * seg.y
+                                    val dist =
+                                      if (lenSq < 0.001f) (tapPos - tape.start).getDistance()
+                                      else {
+                                        val t =
+                                          (((tapPos.x - tape.start.x) * seg.x +
+                                              (tapPos.y - tape.start.y) * seg.y) / lenSq)
+                                            .coerceIn(0f, 1f)
+                                        val proj =
+                                          Offset(
+                                            tape.start.x + t * seg.x,
+                                            tape.start.y + t * seg.y,
+                                          )
+                                        (tapPos - proj).getDistance()
+                                      }
+                                    dist <= tape.thickness * 0.65f
+                                  }
+                                if (hitTape != null) {
+                                  viewModel.toggleStudyTapeReveal(hitTape.id)
+                                }
+                              }
                               return@awaitEachGesture
                             }
                           }
@@ -1156,7 +1202,7 @@ fun EditorScreen(
                                     if (currentShowLasso) onClearLassoSelection()
                                     else onSelectLassoItemAt(activeDown.position)
                                   } else if (inProgressPoints.size >= 3) {
-                                    onAddStroke(inProgressPoints.toList(), emptyList(), false)
+                                    onAddStroke(inProgressPoints.toList(), emptyList(), false, null)
                                   }
                                 }
                                 inProgressPoints.clear()
@@ -1198,6 +1244,8 @@ fun EditorScreen(
                               var loopCandidate = false
                               var switchToErase = false
                               var snappedHoldShapeKind: ShapeKind? = null
+                              var snappedHoldCenter = startPoint
+                              var snappedHoldAnchor = startPoint
 
                               val isHighlighterSub =
                                 currentPrimaryTool == PrimaryTool.WRITING_TOOLS &&
@@ -1222,24 +1270,53 @@ fun EditorScreen(
                                   circleLassoHoldProgress = 0f
                                 }
                                 val constrainedPos =
-                                  if (isHighlighterSub && currentHighlighterStraight) {
-                                    Offset(rawPos.x, startPoint.y)
-                                  } else {
-                                    rawPos
+                                  when {
+                                    uiState.rulerState.isVisible && !isExplicitShapeTool ->
+                                      snapPointAlongRuler(startPoint, rawPos, uiState.rulerState.angleDegrees)
+                                    isHighlighterSub && currentHighlighterStraight ->
+                                      Offset(rawPos.x, startPoint.y)
+                                    else -> rawPos
                                   }
 
                                 // Goodnotes & Samsung Notes Draw-and-Hold behavior:
                                 // Once a stroke snaps into a geometric shape on hold, dragging while still
                                 // holding adjusts the snapped shape's endpoint/scale/orientation live!
                                 if (isDrawingSnappedHold && snappedHoldShapeKind != null && !isHighlighterSub) {
-                                  if (movedDist > 2.5f) {
+                                  val kind = snappedHoldShapeKind!!
+                                  val isOpenKind =
+                                    kind == ShapeKind.LINE ||
+                                      kind == ShapeKind.ARROW ||
+                                      kind == ShapeKind.ANGLE_BRACKET ||
+                                      kind == ShapeKind.CURVE
+                                  val distFromHoldAnchor = (constrainedPos - snappedHoldAnchor).getDistance()
+                                  // Require intentional movement (>16px for closed shapes) before resizing so holding still never collapses a circle!
+                                  if ((isOpenKind && movedDist > 2.5f) || (!isOpenKind && distFromHoldAnchor > 16f)) {
+                                    val previewControlPts =
+                                      if (isOpenKind) {
+                                        listOf(startPoint, constrainedPos)
+                                      } else if (kind == ShapeKind.OVAL || kind == ShapeKind.RECTANGLE) {
+                                        val rx = abs(constrainedPos.x - snappedHoldCenter.x).coerceAtLeast(32f)
+                                        val ry = abs(constrainedPos.y - snappedHoldCenter.y).coerceAtLeast(32f)
+                                        listOf(
+                                          Offset(snappedHoldCenter.x - rx, snappedHoldCenter.y - ry),
+                                          Offset(snappedHoldCenter.x + rx, snappedHoldCenter.y + ry),
+                                        )
+                                      } else {
+                                        val r = (constrainedPos - snappedHoldCenter).getDistance().coerceAtLeast(32f)
+                                        listOf(
+                                          Offset(snappedHoldCenter.x - r, snappedHoldCenter.y - r),
+                                          Offset(snappedHoldCenter.x + r, snappedHoldCenter.y + r),
+                                        )
+                                      }
                                     val draggedPts =
                                       com.example.model.buildShapePreviewPoints(
-                                        points = listOf(startPoint, constrainedPos),
-                                        kind = snappedHoldShapeKind!!,
+                                        points = previewControlPts,
+                                        kind = kind,
                                       ).first
-                                    inProgressPoints.clear()
-                                    inProgressPoints.addAll(draggedPts)
+                                    if (draggedPts.size >= 2) {
+                                      inProgressPoints.clear()
+                                      inProgressPoints.addAll(draggedPts)
+                                    }
                                   }
                                   return
                                 }
@@ -1313,7 +1390,7 @@ fun EditorScreen(
                                         }
                                         if (
                                           loopCandidate &&
-                                            stationaryMs >= CIRCLE_LASSO_HOLD_MS &&
+                                            stationaryMs >= min(CIRCLE_LASSO_HOLD_MS.toLong(), 310L) &&
                                             lassoAttemptEpoch != lastMoveTimeMs
                                         ) {
                                           lassoAttemptEpoch = lastMoveTimeMs
@@ -1326,7 +1403,7 @@ fun EditorScreen(
                                             haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                             break
                                           }
-                                          // Nothing inside the loop: let Draw-and-Hold handle it.
+                                          // Nothing inside the loop: let Draw-and-Hold snap it to a Circle immediately!
                                           loopCandidate = false
                                           circleLassoHoldProgress = 0f
                                         }
@@ -1342,17 +1419,33 @@ fun EditorScreen(
                                         stationaryMs > 320L
                                     ) {
                                       val rawList = inProgressPoints.toList()
-                                      val snappedDirect = com.example.model.ShapeSnapper.snap(rawList)
-                                      val detectedKind =
-                                        viewModel.autoDetectShapeKind(rawList)
+                                      val points2D = rawList.map { shapes_engine.model.Point2D(it.x, it.y) }
+                                      val recognized = viewModel.shapesEngine.recognizeAndFit(points2D, viewModel.shapeSettingsRepo.getStyle())
+                                      val detectedKind = when (recognized.type) {
+                                        shapes_engine.model.ShapeType.LINE -> ShapeKind.LINE
+                                        shapes_engine.model.ShapeType.ARROW -> ShapeKind.ARROW
+                                        shapes_engine.model.ShapeType.ANGLE_BRACKET -> ShapeKind.ANGLE_BRACKET
+                                        shapes_engine.model.ShapeType.CURVE -> ShapeKind.CURVE
+                                        shapes_engine.model.ShapeType.RECTANGLE -> ShapeKind.RECTANGLE
+                                        shapes_engine.model.ShapeType.SQUARE -> ShapeKind.SQUARE
+                                        shapes_engine.model.ShapeType.DIAMOND -> ShapeKind.DIAMOND
+                                        shapes_engine.model.ShapeType.CIRCLE -> ShapeKind.CIRCLE
+                                        shapes_engine.model.ShapeType.ELLIPSE -> ShapeKind.OVAL
+                                        shapes_engine.model.ShapeType.TRIANGLE -> ShapeKind.TRIANGLE
+                                        shapes_engine.model.ShapeType.PENTAGON -> ShapeKind.PENTAGON
+                                        shapes_engine.model.ShapeType.HEXAGON -> ShapeKind.HEXAGON
+                                        shapes_engine.model.ShapeType.STAR -> ShapeKind.STAR
+                                        shapes_engine.model.ShapeType.HEART -> ShapeKind.HEART
+                                      }
                                       snappedHoldShapeKind = detectedKind
-                                      val snappedGeom =
-                                        snappedDirect
-                                          ?: com.example.model.buildShapePreviewPoints(
-                                            rawList,
-                                            detectedKind,
-                                          ).first
+                                      val snappedGeom = recognized.points.map { Offset(it.x, it.y) }
                                       if (snappedGeom.size >= 2) {
+                                        val minX = snappedGeom.minOf { it.x }
+                                        val maxX = snappedGeom.maxOf { it.x }
+                                        val minY = snappedGeom.minOf { it.y }
+                                        val maxY = snappedGeom.maxOf { it.y }
+                                        snappedHoldCenter = Offset((minX + maxX) * 0.5f, (minY + maxY) * 0.5f)
+                                        snappedHoldAnchor = lastMovePoint
                                         inProgressPoints.clear()
                                         inProgressPoints.addAll(snappedGeom)
                                       }
@@ -1444,10 +1537,64 @@ fun EditorScreen(
                               if (!switchedToTwoFingerZoom && !circleLassoHoldTriggered && inProgressPoints.isNotEmpty()) {
                                 val totalDragDist =
                                   (inProgressPoints.last() - startPoint).getDistance()
-                                if (isExplicitShapeTool && totalDragDist < 14f && inProgressPoints.size <= 5) {
-                                  // Tapping on an existing shape in Shape Mode selects it for vertex/move editing
-                                  viewModel.selectShapeAtPoint(startPoint)
+                                val tappedStudyTape =
+                                  if (totalDragDist < 14f && inProgressPoints.size <= 5) {
+                                    studyTapesRef.value.asReversed().firstOrNull { tape ->
+                                      val seg = tape.end - tape.start
+                                      val lenSq = seg.x * seg.x + seg.y * seg.y
+                                      val dist =
+                                        if (lenSq < 0.001f) (startPoint - tape.start).getDistance()
+                                        else {
+                                          val t =
+                                            (((startPoint.x - tape.start.x) * seg.x +
+                                                (startPoint.y - tape.start.y) * seg.y) / lenSq)
+                                              .coerceIn(0f, 1f)
+                                          val proj =
+                                            Offset(
+                                              tape.start.x + t * seg.x,
+                                              tape.start.y + t * seg.y,
+                                            )
+                                          (startPoint - proj).getDistance()
+                                        }
+                                      dist <= tape.thickness * 0.65f
+                                    }
+                                  } else null
+
+                                if (tappedStudyTape != null) {
+                                  viewModel.toggleStudyTapeReveal(tappedStudyTape.id)
+                                } else if (totalDragDist < 14f && inProgressPoints.size <= 5) {
+                                  // Check for 3-times quick tap on the screen to launch Video Showcase!
+                                  val nowTapMs = System.currentTimeMillis()
+                                  if (
+                                    nowTapMs - canvasLastTapTimeMs <= 550L &&
+                                      (startPoint - canvasLastTapPos).getDistance() < 64f
+                                  ) {
+                                    canvasTripleTapCount += 1
+                                  } else {
+                                    canvasTripleTapCount = 1
+                                  }
+                                  canvasLastTapTimeMs = nowTapMs
+                                  canvasLastTapPos = startPoint
+                                  if (canvasTripleTapCount >= 3) {
+                                    canvasTripleTapCount = 0
+                                    viewModel.openThankYouScreen()
+                                  } else if (isExplicitShapeTool) {
+                                    // Tapping on an existing shape in Shape Mode selects it for vertex/move editing
+                                    viewModel.selectShapeAtPoint(startPoint)
+                                  } else {
+                                    if (inProgressPoints.size == 1) {
+                                      inProgressPoints.add(startPoint + Offset(0.8f, 0.8f))
+                                      inProgressPressures.add(startPressure)
+                                    }
+                                    onAddStroke(
+                                      inProgressPoints.toList(),
+                                      inProgressPressures.toList(),
+                                      isDrawingSnappedHold,
+                                      if (isDrawingSnappedHold) snappedHoldShapeKind else null,
+                                    )
+                                  }
                                 } else {
+                                  canvasTripleTapCount = 0
                                   // Support single-tap stylus dots / periods
                                   if (inProgressPoints.size == 1) {
                                     inProgressPoints.add(startPoint + Offset(0.8f, 0.8f))
@@ -1457,6 +1604,7 @@ fun EditorScreen(
                                     inProgressPoints.toList(),
                                     inProgressPressures.toList(),
                                     isDrawingSnappedHold,
+                                    if (isDrawingSnappedHold) snappedHoldShapeKind else null,
                                   )
                                 }
                               }
@@ -1501,6 +1649,60 @@ fun EditorScreen(
                         isSelectedByLasso = lassoSelectedStrokeIds.contains(stroke.id),
                       )
                     }
+
+                  // Render Interactive Study Tapes (Tap to Reveal / Hide flashcards)
+                  pageData.studyTapes.forEach { tape ->
+                    val mid =
+                      Offset(
+                        (tape.start.x + tape.end.x) * 0.5f,
+                        (tape.start.y + tape.end.y) * 0.5f,
+                      )
+                    if (!tape.isRevealed) {
+                      drawLine(
+                        color = Color.Black.copy(alpha = 0.18f),
+                        start = tape.start,
+                        end = tape.end,
+                        strokeWidth = tape.thickness + 3f,
+                        cap = StrokeCap.Round,
+                      )
+                      drawLine(
+                        color = tape.color.copy(alpha = 0.95f),
+                        start = tape.start,
+                        end = tape.end,
+                        strokeWidth = tape.thickness,
+                        cap = StrokeCap.Round,
+                      )
+                      drawLine(
+                        color = Color.White.copy(alpha = 0.35f),
+                        start = tape.start,
+                        end = tape.end,
+                        strokeWidth = 2.5f,
+                        cap = StrokeCap.Round,
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 10f), 0f),
+                      )
+                      drawCircle(
+                        color = Color.White.copy(alpha = 0.88f),
+                        radius = 4.5f,
+                        center = mid,
+                      )
+                    } else {
+                      drawLine(
+                        color = tape.color.copy(alpha = 0.20f),
+                        start = tape.start,
+                        end = tape.end,
+                        strokeWidth = tape.thickness,
+                        cap = StrokeCap.Round,
+                      )
+                      drawLine(
+                        color = tape.color.copy(alpha = 0.65f),
+                        start = tape.start,
+                        end = tape.end,
+                        strokeWidth = 2.2f,
+                        cap = StrokeCap.Round,
+                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 8f), 0f),
+                      )
+                    }
+                  }
 
                   // Laser Pointer Trails
                   if (isCurrentActivePage) {
@@ -1571,14 +1773,14 @@ fun EditorScreen(
                     val liveW =
                       when {
                         isHigh -> baseW * 3.4f
-                        isTape -> baseW * 3.6f
+                        isTape -> 38f
                         isPencilTool -> baseW * 0.9f
                         else -> baseW
                       }
                     val liveColor =
                       when {
                         isHigh -> selectedColor.copy(alpha = 0.38f)
-                        isTape -> Color(0xFFFFAB40).copy(alpha = 0.85f)
+                        isTape -> selectedColor.copy(alpha = 0.90f)
                         isPencilTool -> selectedColor.copy(alpha = 0.78f)
                         else -> selectedColor
                       }
@@ -1593,25 +1795,20 @@ fun EditorScreen(
                         color = liveColor,
                         style = Stroke(width = liveW, cap = StrokeCap.Round, join = StrokeJoin.Round),
                       )
-                    } else if (liveIsShapeOrSnap && !isHigh) {
+                    } else if (isDrawingSnappedHold && !isHigh) {
                       val previewPtsSnapshot = inProgressPoints.toList()
-                      val previewKind =
-                        if (isExplicitShape && !uiState.shapeAutoDetectMode) {
-                          uiState.selectedShapeKind
-                        } else {
-                          viewModel.autoDetectShapeKind(previewPtsSnapshot)
-                        }
-                      val (geomPts, previewHandles) =
-                        com.example.model.buildShapePreviewPoints(previewPtsSnapshot, previewKind)
+                      val previewKind = viewModel.autoDetectShapeKind(previewPtsSnapshot)
+                      val currentShapeStyle = viewModel.shapeSettingsRepo.getStyle()
                       val shouldFill =
-                        fillShapes &&
+                        currentShapeStyle.fillEnabled &&
                           previewKind != ShapeKind.LINE &&
                           previewKind != ShapeKind.ARROW &&
+                          previewKind != ShapeKind.ANGLE_BRACKET &&
                           previewKind != ShapeKind.CURVE
                       drawRichStroke(
                         stroke =
                           DrawnStroke(
-                            points = geomPts,
+                            points = previewPtsSnapshot,
                             color = liveColor,
                             strokeWidth = liveW,
                             penStyle = penStyle,
@@ -1619,22 +1816,10 @@ fun EditorScreen(
                             isShape = true,
                             shapeKind = previewKind,
                             shapeFill = shouldFill,
+                            shapeFillOpacity = currentShapeStyle.fillOpacity,
                           ),
                         isSelectedByLasso = false,
                       )
-                      previewHandles.forEach { hPt ->
-                        drawCircle(
-                          color = Color.White,
-                          radius = 6.5f,
-                          center = hPt,
-                        )
-                        drawCircle(
-                          color = SwitchBlue,
-                          radius = 6.5f,
-                          center = hPt,
-                          style = Stroke(width = 2.2f),
-                        )
-                      }
                     } else {
                       drawRichStroke(
                         stroke =
@@ -2024,165 +2209,8 @@ fun EditorScreen(
                   }
                 }
 
-                // Interactive Shape Vertex Control Handles, Center Move Handle & Floating Shape Actions
-                if (isCurrentActivePage) {
-                  val editableShapeStroke =
-                    pageData.strokes.lastOrNull { s ->
-                      s.isShape &&
-                        s.shapeControlPoints.isNotEmpty() &&
-                        (s.id == activeShapeEditStrokeId ||
-                          primaryTool == PrimaryTool.SHAPE ||
-                          (primaryTool == PrimaryTool.WRITING_TOOLS &&
-                            activeWritingSubTool == WritingSubTool.DRAW_SHAPE))
-                    }
-                  if (editableShapeStroke != null) {
-                    val handles = editableShapeStroke.shapeControlPoints
-                    val centerPt =
-                      Offset(
-                        handles.map { it.x }.average().toFloat(),
-                        handles.map { it.y }.average().toFloat(),
-                      )
-                    val topY = handles.minOf { it.y }
-
-                    // Center Drag-to-Move Shape Handle
-                    Box(
-                      modifier =
-                        Modifier
-                          .offset {
-                            IntOffset((centerPt.x - 13f).roundToInt(), (centerPt.y - 13f).roundToInt())
-                          }
-                          .size(26.dp)
-                          .shadow(5.dp, CircleShape)
-                          .clip(CircleShape)
-                          .background(SwitchBlue)
-                          .border(2.dp, Color.White, CircleShape)
-                          .pointerInput(editableShapeStroke.id) {
-                            detectDragGestures(
-                              onDragStart = { onRecordUndoBeforeGesture() },
-                            ) { change, dragAmount ->
-                              change.consume()
-                              viewModel.moveEntireShapeStroke(editableShapeStroke.id, dragAmount)
-                            }
-                          }
-                          .testTag("shape_center_move_handle"),
-                      contentAlignment = Alignment.Center,
-                    ) {
-                      Icon(
-                        imageVector = Icons.Outlined.OpenWith,
-                        contentDescription = "Move Shape",
-                        tint = Color.White,
-                        modifier = Modifier.size(14.dp),
-                      )
-                    }
-
-                    // Individual Vertex Control Handles
-                    handles.forEachIndexed { handleIdx, pt ->
-                      Box(
-                        modifier =
-                          Modifier
-                            .offset {
-                              IntOffset((pt.x - 10f).roundToInt(), (pt.y - 10f).roundToInt())
-                            }
-                            .size(20.dp)
-                            .shadow(4.dp, CircleShape)
-                            .clip(CircleShape)
-                            .background(Color.White)
-                            .border(2.5.dp, SwitchBlue, CircleShape)
-                            .pointerInput(editableShapeStroke.id, handleIdx) {
-                              detectDragGestures(
-                                onDragStart = { onRecordUndoBeforeGesture() },
-                              ) { change, dragAmount ->
-                                change.consume()
-                                onMoveShapeControlHandle(editableShapeStroke.id, handleIdx, dragAmount)
-                              }
-                            }
-                            .testTag("shape_handle_$handleIdx"),
-                      )
-                    }
-
-                    // Floating Shape Action Pill (Fill, Duplicate, Delete, Done)
-                    val actionTopY =
-                      if (topY > 64f) (topY - 52f).coerceAtLeast(8f)
-                      else (handles.maxOf { it.y } + 18f)
-                    Row(
-                      modifier =
-                        Modifier
-                          .offset {
-                            IntOffset(
-                              (centerPt.x - 135f).coerceAtLeast(10f).roundToInt(),
-                              actionTopY.roundToInt(),
-                            )
-                          }
-                          .shadow(8.dp, RoundedCornerShape(16.dp))
-                          .clip(RoundedCornerShape(16.dp))
-                          .background(Color(0xEE1C1E26))
-                          .border(1.dp, Color(0xFF363A48), RoundedCornerShape(16.dp))
-                          .padding(horizontal = 10.dp, vertical = 5.dp)
-                          .testTag("active_shape_action_pill"),
-                      verticalAlignment = Alignment.CenterVertically,
-                      horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                      Text(
-                        text = editableShapeStroke.shapeKind?.label ?: "Shape",
-                        color = Color(0xFF67C8EB),
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                      )
-                      if (
-                        editableShapeStroke.shapeKind != ShapeKind.LINE &&
-                          editableShapeStroke.shapeKind != ShapeKind.ARROW &&
-                          editableShapeStroke.shapeKind != ShapeKind.CURVE
-                      ) {
-                        Text(
-                          text = if (editableShapeStroke.shapeFill) "Filled" else "Outline",
-                          color = Color.White,
-                          fontSize = 11.sp,
-                          fontWeight = FontWeight.Medium,
-                          modifier =
-                            Modifier
-                              .clip(RoundedCornerShape(6.dp))
-                              .background(
-                                if (editableShapeStroke.shapeFill) SwitchBlue.copy(alpha = 0.35f)
-                                else Color(0xFF2C2E38)
-                              )
-                              .clickable { viewModel.toggleActiveShapeFill() }
-                              .padding(horizontal = 6.dp, vertical = 2.dp),
-                        )
-                      }
-                      Text(
-                        text = "Copy",
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium,
-                        modifier =
-                          Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .clickable { viewModel.duplicateActiveShape() }
-                            .padding(horizontal = 5.dp, vertical = 2.dp),
-                      )
-                      Text(
-                        text = "Delete",
-                        color = DangerRed,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier =
-                          Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .clickable { viewModel.deleteActiveShape() }
-                            .padding(horizontal = 5.dp, vertical = 2.dp),
-                      )
-                      Icon(
-                        imageVector = Icons.Default.Check,
-                        contentDescription = "Done editing shape",
-                        tint = Color(0xFF4CAF50),
-                        modifier =
-                          Modifier
-                            .size(16.dp)
-                            .clickable { viewModel.clearActiveShapeEdit() },
-                      )
-                    }
-                  }
-                }
+                // Direct unselected commit: no blue shape selection handles or floating pill on canvas
+                // so the user can continuously draw shapes without interruption.
 
                 // Element Stamps
                 pageData.elements.forEach { element ->
@@ -2580,76 +2608,13 @@ fun EditorScreen(
               }
             }
 
-            // Pull to Add Page & More Page / Cover Options Bar at the bottom of the page
-            if (pullToAddPage) {
-              Row(
-                modifier =
-                  Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(bottom = 12.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xE01A2234))
-                    .border(1.dp, Color(0xFF38BDF8).copy(alpha = 0.45f), RoundedCornerShape(16.dp))
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
-                    .testTag("pull_to_add_page_bar"),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-              ) {
-                Row(
-                  modifier =
-                    Modifier
-                      .clip(RoundedCornerShape(8.dp))
-                      .clickable { onAddNewPage() }
-                      .padding(horizontal = 6.dp, vertical = 3.dp)
-                      .testTag("pull_add_page_quick_button"),
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                  Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = "Pull or Tap to Add Page",
-                    tint = Color(0xFF38BDF8),
-                    modifier = Modifier.size(15.dp),
-                  )
-                  Text(
-                    text = "Pull or Tap + Page",
-                    color = Color.White,
-                    fontSize = 11.5.sp,
-                    fontWeight = FontWeight.SemiBold,
-                  )
-                }
-                Box(
-                  modifier =
-                    Modifier
-                      .width(1.dp)
-                      .height(14.dp)
-                      .background(Color.White.copy(alpha = 0.22f)),
-                )
-                Row(
-                  modifier =
-                    Modifier
-                      .clip(RoundedCornerShape(8.dp))
-                      .clickable { viewModel.togglePopover(ActivePopover.ADD_PAGE_DIALOG) }
-                      .padding(horizontal = 6.dp, vertical = 3.dp)
-                      .testTag("pull_page_options_button"),
-                  verticalAlignment = Alignment.CenterVertically,
-                  horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                  Icon(
-                    imageVector = Icons.Outlined.Description,
-                    contentDescription = "Page Templates & Cover Options",
-                    tint = Color(0xFFF59E0B),
-                    modifier = Modifier.size(14.dp),
-                  )
-                  Text(
-                    text = "Templates & Cover",
-                    color = Color(0xFFFDE68A),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
-                  )
-                }
-              }
-            }
+            // Interactive rotatable Ruler overlay when Ruler sub-tool is toggled on
+            InteractiveRulerOverlay(
+              rulerState = uiState.rulerState,
+              onMoveRuler = viewModel::moveRuler,
+              onRotateRuler = viewModel::rotateRuler,
+              onCloseRuler = viewModel::toggleRuler,
+            )
           }
 
           // Active Popovers Anchored Cleanly Below Top Docked Bars
@@ -2724,18 +2689,9 @@ fun EditorScreen(
                 }
 
                 ActivePopover.SHAPE_SETTINGS -> {
-                  ShapeSettingsPopover(
-                    selectedShapeKind = uiState.selectedShapeKind,
-                    shapeAutoDetectMode = uiState.shapeAutoDetectMode,
-                    lastAutoDetectedShape = lastAutoDetectedShape,
-                    fillShapes = fillShapes,
-                    onSelectShapeForDraw = { kind ->
-                      viewModel.selectShapeForDirectDraw(kind)
-                      onDismissPopover()
-                    },
-                    onToggleShapeAutoDetect = viewModel::setShapeAutoDetectMode,
-                    onInsertQuickShape = onInsertQuickShape,
-                    onToggleFillShapes = onToggleFillShapes,
+                  shapes_engine.ui.ShapeSettingsSheet(
+                    repository = viewModel.shapeSettingsRepo,
+                    onDismissRequest = onDismissPopover,
                   )
                 }
 
@@ -2836,15 +2792,18 @@ fun EditorScreen(
               strokeCount = currentPage.strokes.size,
               shapeCount = currentPage.strokes.count { it.isShape },
               showLassoSelection = showLassoSelection,
-              laserTrailCount = laserTrails.size,
+              laserTrailCount = laserTrails.size + currentPage.studyTapes.size,
               onSelectStylusBrand = viewModel::selectStylusBrand,
+              onJumpToStep = viewModel::jumpToInteractiveTourStep,
+              onRunAutoDemo = viewModel::runTourStepAutoDemo,
+              onOpenCinemaShowcase = viewModel::openThankYouScreen,
               onPrevStep = viewModel::previousInteractiveTourStep,
               onNextStep = viewModel::advanceInteractiveTourStep,
               onDismiss = viewModel::dismissInteractiveTour,
               modifier =
                 Modifier
                   .align(Alignment.BottomCenter)
-                  .padding(bottom = 52.dp, start = 16.dp, end = 16.dp),
+                  .padding(bottom = 20.dp, start = 16.dp, end = 16.dp),
             )
           }
 
@@ -2884,7 +2843,7 @@ fun EditorScreen(
           strokeWidth = thicknessPresets.getOrElse(selectedThicknessIndex) { 6.5f },
           targetBoxOffset = zoomTargetBoxOffset,
           onCommitZoomStroke = { scaledPts ->
-            onAddStroke(scaledPts, emptyList(), false)
+            onAddStroke(scaledPts, emptyList(), false, null)
           },
           onAdvanceZoomBox = onAdvanceZoomBox,
           onCloseZoomWindow = onToggleZoomWindow,
@@ -2902,6 +2861,7 @@ fun EditorScreen(
 private fun DockedMainToolbar(
   primaryTool: PrimaryTool,
   enabledToolbarTools: Set<PrimaryTool>,
+  selectedColor: Color,
   isBookmarked: Boolean,
   isWhiteboard: Boolean,
   onlyDrawWithStylus: Boolean,
@@ -2924,6 +2884,7 @@ private fun DockedMainToolbar(
   onClearPageStrokes: () -> Unit,
   onToggleOnlyDrawWithStylus: () -> Unit,
   onOpenSettings: () -> Unit,
+  onStartInteractiveTour: () -> Unit = {},
 ) {
   Row(
     modifier =
@@ -3058,6 +3019,7 @@ private fun DockedMainToolbar(
                 tool = tool,
                 tint = if (isSelected) ActiveToolIconDark else ToolbarIconLight,
                 modifier = Modifier.size(23.dp),
+                accentColor = selectedColor,
               )
               if (isSelected) {
                 Box(
@@ -3252,6 +3214,23 @@ private fun DockedMainToolbar(
             },
           )
           DropdownMenuItem(
+            text = {
+              Text(
+                "Stylus Setup & Interactive Tour",
+                color = Color(0xFF67C8EB),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+              )
+            },
+            leadingIcon = {
+              Icon(Icons.Outlined.Tune, contentDescription = null, tint = Color(0xFF67C8EB))
+            },
+            onClick = {
+              showMoreMenu = false
+              onStartInteractiveTour()
+            },
+          )
+          DropdownMenuItem(
             text = { Text("Clear Current Page", color = DangerRed, fontSize = 13.sp) },
             onClick = {
               showMoreMenu = false
@@ -3360,6 +3339,7 @@ private fun DockedContextualWritingStrip(
                   subTool = subTool,
                   tint = SubToolbarActiveCyan,
                   modifier = Modifier.size(19.dp),
+                  accentColor = selectedColor,
                 )
                 Icon(
                   imageVector = Icons.Default.KeyboardArrowDown,
@@ -3385,6 +3365,7 @@ private fun DockedContextualWritingStrip(
                   subTool = subTool,
                   tint = ToolbarIconLight.copy(alpha = 0.9f),
                   modifier = Modifier.size(19.dp),
+                  accentColor = selectedColor,
                 )
               }
             }
@@ -4292,7 +4273,7 @@ private fun DrawScope.drawRichStroke(
     }
 
   if (stroke.isShape && stroke.shapeFill && stroke.points.size >= 3) {
-    drawPath(path = path, color = stroke.color.copy(alpha = 0.18f))
+    drawPath(path = path, color = stroke.color.copy(alpha = stroke.shapeFillOpacity))
   }
 
   val avgPressure =
@@ -4301,7 +4282,11 @@ private fun DrawScope.drawRichStroke(
     when {
       stroke.isHighlighter || stroke.isShape -> stroke.strokeWidth
       stroke.penStyle == PenStyle.FOUNTAIN -> stroke.strokeWidth * (0.75f + avgPressure * 0.55f)
+      stroke.penStyle == PenStyle.FINELINER -> (stroke.strokeWidth * 0.62f).coerceAtLeast(1.8f)
       stroke.penStyle == PenStyle.BRUSH -> stroke.strokeWidth * (0.65f + avgPressure * 0.95f)
+      stroke.penStyle == PenStyle.CALLIGRAPHY -> stroke.strokeWidth * 1.25f
+      stroke.penStyle == PenStyle.MARKER -> stroke.strokeWidth * 1.75f
+      stroke.penStyle == PenStyle.NEON_GLOW -> stroke.strokeWidth * 1.05f
       else -> stroke.strokeWidth
     }
 
@@ -4317,6 +4302,65 @@ private fun DrawScope.drawRichStroke(
           join = StrokeJoin.Round,
         ),
     )
+  }
+
+  // Multi-layer luminous rendering for Neon Glow pen style
+  if (!stroke.isHighlighter && !stroke.isShape && stroke.penStyle == PenStyle.NEON_GLOW) {
+    drawPath(
+      path = path,
+      color = stroke.color.copy(alpha = 0.24f),
+      style =
+        Stroke(
+          width = dynamicWidth * 2.8f,
+          cap = StrokeCap.Round,
+          join = StrokeJoin.Round,
+          pathEffect = dashEffect,
+        ),
+    )
+    drawPath(
+      path = path,
+      color = stroke.color.copy(alpha = 0.62f),
+      style =
+        Stroke(
+          width = dynamicWidth * 1.55f,
+          cap = StrokeCap.Round,
+          join = StrokeJoin.Round,
+          pathEffect = dashEffect,
+        ),
+    )
+    drawPath(
+      path = path,
+      color = Color.White.copy(alpha = 0.92f),
+      style =
+        Stroke(
+          width = (dynamicWidth * 0.52f).coerceAtLeast(1.6f),
+          cap = StrokeCap.Round,
+          join = StrokeJoin.Round,
+          pathEffect = dashEffect,
+        ),
+    )
+    return
+  }
+
+  // 45° Italic Ribbon Rendering for Calligraphy Nib
+  if (!stroke.isHighlighter && !stroke.isShape && stroke.penStyle == PenStyle.CALLIGRAPHY && stroke.strokePattern == StrokePattern.SOLID) {
+    val nibAngleRad = Math.toRadians(45.0)
+    for (i in 1 until stroke.points.size) {
+      val p0 = stroke.points[i - 1]
+      val p1 = stroke.points[i]
+      val segAngle = atan2((p1.y - p0.y).toDouble(), (p1.x - p0.x).toDouble())
+      val ribbonFactor = abs(sin(segAngle - nibAngleRad)).toFloat()
+      val pr = if (i < stroke.pressures.size) stroke.pressures[i] else 0.7f
+      val w = (stroke.strokeWidth * (0.32f + 1.25f * ribbonFactor) * (0.75f + 0.35f * pr)).coerceAtLeast(1.6f)
+      drawLine(
+        color = stroke.color,
+        start = p0,
+        end = p1,
+        strokeWidth = w,
+        cap = StrokeCap.Square,
+      )
+    }
+    return
   }
 
   // Variable-width pressure-modulated rendering when per-point stylus pressures are present
@@ -4347,15 +4391,16 @@ private fun DrawScope.drawRichStroke(
       )
     }
   } else {
+    val isChiselMarker = !stroke.isHighlighter && !stroke.isShape && stroke.penStyle == PenStyle.MARKER
     drawPath(
       path = path,
-      color = stroke.color,
+      color = if (isChiselMarker) stroke.color.copy(alpha = 0.86f) else stroke.color,
       blendMode = if (stroke.isHighlighter) BlendMode.Darken else DrawScope.DefaultBlendMode,
       style =
         Stroke(
           width = dynamicWidth,
-          cap = StrokeCap.Round,
-          join = StrokeJoin.Round,
+          cap = if (isChiselMarker) StrokeCap.Square else StrokeCap.Round,
+          join = if (isChiselMarker) StrokeJoin.Bevel else StrokeJoin.Round,
           pathEffect = dashEffect,
         ),
     )
@@ -4394,6 +4439,7 @@ private fun DockedShapeStudioStrip(
   onToggleAutoDetect: (Boolean) -> Unit,
   onSelectShapeForDraw: (ShapeKind) -> Unit,
   onToggleFillShapes: () -> Unit,
+  onOpenShapeSettings: () -> Unit,
   onStampShape: () -> Unit,
 ) {
   Row(
@@ -4506,6 +4552,38 @@ private fun DockedShapeStudioStrip(
       )
     }
 
+    // Style Settings Button (opens ShapeSettingsSheet)
+    Row(
+      modifier =
+        Modifier
+          .height(30.dp)
+          .clip(RoundedCornerShape(8.dp))
+          .background(Color(0xFF252832))
+          .border(
+            width = 1.dp,
+            color = Color(0xFF3B82F6),
+            shape = RoundedCornerShape(8.dp),
+          )
+          .clickable(onClick = onOpenShapeSettings)
+          .padding(horizontal = 9.dp)
+          .testTag("shape_style_settings_button"),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+      Icon(
+        imageVector = Icons.Outlined.Tune,
+        contentDescription = "Shape Settings",
+        tint = Color(0xFF60A5FA),
+        modifier = Modifier.size(13.dp),
+      )
+      Text(
+        text = "Style Settings",
+        color = Color(0xFF60A5FA),
+        fontSize = 11.sp,
+        fontWeight = FontWeight.SemiBold,
+      )
+    }
+
     // One-Tap Stamp Button
     Box(
       modifier =
@@ -4536,6 +4614,9 @@ private fun InteractiveFeatureTourOverlay(
   showLassoSelection: Boolean,
   laserTrailCount: Int,
   onSelectStylusBrand: (com.example.model.StylusPenBrand) -> Unit,
+  onJumpToStep: (Int) -> Unit,
+  onRunAutoDemo: () -> Unit,
+  onOpenCinemaShowcase: () -> Unit,
   onPrevStep: () -> Unit,
   onNextStep: () -> Unit,
   onDismiss: () -> Unit,
@@ -4546,6 +4627,8 @@ private fun InteractiveFeatureTourOverlay(
     remember(StylusInputTracker.detectedHardwareBrand, StylusInputTracker.detectedDeviceName) {
       StylusInputTracker.detectConnectedStylusHardware(context)
     }
+  var isMinimized by remember { mutableStateOf(false) }
+  var showVideoGuide by remember { mutableStateOf(false) }
 
   // Auto-apply detected stylus profile on Step 0
   LaunchedEffect(step, detectedHardware.first) {
@@ -4568,31 +4651,78 @@ private fun InteractiveFeatureTourOverlay(
       else -> strokeCount < baselineStrokes
     }
 
+  val stepLabels =
+    remember {
+      listOf("1. Stylus", "2. Circle Snap", "3. Shapes", "4. Lasso", "5. Laser/Tape", "6. Eraser")
+    }
+
   val title =
     when (step) {
-      0 -> "Step 1 of 6 · Stylus Auto-Detect & Barrel Roll"
-      1 -> "Step 2 of 6 · Draw & Hold Shape Snap"
-      2 -> "Step 3 of 6 · Live Shape Studio (11 Geometries)"
-      3 -> "Step 4 of 6 · Circle-to-Lasso & Auto-Return"
-      4 -> "Step 5 of 6 · Exclusive Color Laser Pointer"
-      else -> "Step 6 of 6 · Side-Button Erase & Pull Page"
+      0 -> "Step 1 of 6 · 7 Studio Pens & Live Stylus Engine"
+      1 -> "Step 2 of 6 · Draw & Hold Perfect Circle Snap"
+      2 -> "Step 3 of 6 · 14 Geometric Shapes & Ruler"
+      3 -> "Step 4 of 6 · Smart Lasso (Move vs. Lift)"
+      4 -> "Step 5 of 6 · Study Tape & Laser Pointer"
+      else -> "Step 6 of 6 · Precision Eraser & 3x Tap Video"
     }
 
   val instruction =
     when (step) {
       0 ->
-        "Detected: ${detectedHardware.first.label} (${detectedHardware.second}). Write on the canvas to test live pressure (${(StylusInputTracker.livePressure * 100).roundToInt()}%) & barrel roll (${StylusInputTracker.barrelRollDegrees.roundToInt()}°)!"
+        "Active: ${selectedStylusBrand.label}. Try our 7 studio pens (Fountain, Fineliner, Calligraphy, Chisel Marker, Neon Glow) or tap '✨ Auto-Demo' to see pressure ink in action!"
       1 ->
-        "Sketch a rough circle, triangle, box, or line and HOLD your stylus tip still for 0.3s at the end — watch it snap into crisp geometry! Keep holding & drag to resize."
+        "Draw a freehand circle or polygon and HOLD your stylus tip still for 0.3s at the end — it snaps into a crisp geometric shape! Keep holding & drag outward to scale."
       2 ->
-        "Drag across the page to draw a live Star, or tap any of the 11 shapes in the Shape Studio strip above to draw & drag vertex handles."
+        "Draw angle brackets (< >), curves, diamonds, or stars, or toggle the rotatable Ruler in the writing strip to snap straight technical lines."
       3 ->
-        "Draw a closed loop around your strokes and hold briefly at the end — it turns into a Lasso selection, and automatically returns to your Pen after you move or edit!"
+        "Circle any strokes: moving your selection automatically returns to your previous pen tool, while lifting without moving keeps Lasso active!"
       4 ->
-        "Notice no other tool is selected while Laser is active! Pick any color swatch above and glide across the page for a glowing laser trail."
+        "Glide across the canvas with the Laser Pointer, or draw over answers with Study Tape and tap any tape strip to reveal/hide!"
       else ->
-        "Swipe across strokes (or hold your stylus barrel button) to erase smoothly, or pull the bottom '+ Page' bar to add new pages & covers!"
+        "Swipe across strokes to erase cleanly — and remember: Triple-Tap (3x tap) anywhere on the canvas or header anytime to launch the full-screen Video Showcase!"
     }
+
+  if (isMinimized) {
+    Row(
+      modifier =
+        modifier
+          .shadow(14.dp, RoundedCornerShape(50))
+          .clip(RoundedCornerShape(50))
+          .background(Color(0xF5181C29))
+          .border(
+            1.5.dp,
+            if (stepCompleted) Color(0xFF4CAF50) else Color(0xFF38BDF8),
+            RoundedCornerShape(50),
+          )
+          .clickable { isMinimized = false }
+          .padding(horizontal = 16.dp, vertical = 10.dp)
+          .testTag("interactive_tour_minimized_pill"),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+      Box(
+        modifier =
+          Modifier
+            .size(8.dp)
+            .clip(CircleShape)
+            .background(if (stepCompleted) Color(0xFF4CAF50) else Color(0xFF38BDF8)),
+      )
+      Text(
+        text = "Tour ${step + 1}/6 · ${stepLabels.getOrElse(step) { "" }} (Tap to expand)",
+        color = Color.White,
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+      )
+      Text(
+        text = "Next →",
+        color = Color(0xFF38BDF8),
+        fontSize = 12.sp,
+        fontWeight = FontWeight.Bold,
+        modifier = Modifier.clickable(onClick = onNextStep),
+      )
+    }
+    return
+  }
 
   val demoAnimProgress by
     rememberInfiniteTransition(label = "tourVisualDemo")
@@ -4606,29 +4736,31 @@ private fun InteractiveFeatureTourOverlay(
   Column(
     modifier =
       modifier
-        .widthIn(max = 550.dp)
+        .widthIn(max = 580.dp)
         .fillMaxWidth()
-        .shadow(18.dp, RoundedCornerShape(22.dp))
+        .shadow(20.dp, RoundedCornerShape(22.dp))
         .clip(RoundedCornerShape(22.dp))
         .background(
           Brush.verticalGradient(
-            colors = listOf(Color(0xF5181C29), Color(0xF8111520))
+            colors = listOf(Color(0xF6161B28), Color(0xFA0F131D))
           )
         )
         .border(
           width = 1.5.dp,
-          color = if (stepCompleted) Color(0xFF4CAF50) else Color(0xFF4C8DF6),
+          color = if (stepCompleted) Color(0xFF4CAF50) else Color(0xFF38BDF8),
           shape = RoundedCornerShape(22.dp),
         )
-        .padding(16.dp)
+        .padding(15.dp)
         .testTag("interactive_tour_coach_card"),
   ) {
+    // Top Header Row: Status Badge + Title + Video PiP Toggle + Minimize + Close
     Row(
       modifier = Modifier.fillMaxWidth(),
       horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Row(
+        modifier = Modifier.weight(1f),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
@@ -4638,165 +4770,310 @@ private fun InteractiveFeatureTourOverlay(
               .clip(RoundedCornerShape(8.dp))
               .background(
                 if (stepCompleted) Color(0xFF4CAF50).copy(alpha = 0.22f)
-                else Color(0xFF4C8DF6).copy(alpha = 0.22f)
+                else Color(0xFF38BDF8).copy(alpha = 0.20f)
               )
               .padding(horizontal = 8.dp, vertical = 4.dp),
         ) {
           Text(
-            text = if (stepCompleted) "✓ FEATURE VERIFIED" else "IMMERSIVE TOUR",
+            text = if (stepCompleted) "✓ COMPLETED" else "STUDIO TOUR",
             color = if (stepCompleted) Color(0xFF81C784) else Color(0xFF67C8EB),
-            fontSize = 10.sp,
+            fontSize = 9.5.sp,
             fontWeight = FontWeight.Bold,
           )
         }
         Text(
           text = title,
           color = Color.White,
-          fontSize = 13.5.sp,
+          fontSize = 13.sp,
           fontWeight = FontWeight.Bold,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
         )
       }
 
-      Icon(
-        imageVector = Icons.Default.Close,
-        contentDescription = "Exit Tour",
-        tint = TextSecondaryGray,
-        modifier =
-          Modifier
-            .size(20.dp)
-            .clickable(onClick = onDismiss)
-            .testTag("dismiss_interactive_tour_button"),
-      )
+      Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+      ) {
+        // Toggle Embedded Video Guide PiP
+        Box(
+          modifier =
+            Modifier
+              .clip(RoundedCornerShape(8.dp))
+              .background(if (showVideoGuide) Color(0xFF38BDF8).copy(alpha = 0.24f) else Color(0xFF232838))
+              .clickable { showVideoGuide = !showVideoGuide }
+              .padding(horizontal = 8.dp, vertical = 4.dp)
+              .testTag("tour_toggle_video_pip_button"),
+        ) {
+          Text(
+            text = if (showVideoGuide) "Hide Video" else "🎬 Video Clip",
+            color = if (showVideoGuide) Color(0xFF67C8EB) else Color(0xFFD5D9E4),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+          )
+        }
+
+        // Minimize HUD Pill button
+        Box(
+          modifier =
+            Modifier
+              .clip(RoundedCornerShape(8.dp))
+              .background(Color(0xFF232838))
+              .clickable { isMinimized = true }
+              .padding(horizontal = 7.dp, vertical = 4.dp)
+              .testTag("tour_minimize_button"),
+        ) {
+          Text(
+            text = "—",
+            color = TextSecondaryGray,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+          )
+        }
+
+        Icon(
+          imageVector = Icons.Default.Close,
+          contentDescription = "Exit Tour",
+          tint = TextSecondaryGray,
+          modifier =
+            Modifier
+              .size(20.dp)
+              .clickable(onClick = onDismiss)
+              .testTag("dismiss_interactive_tour_button"),
+        )
+      }
     }
 
     Spacer(modifier = Modifier.height(8.dp))
 
-    // Animated Visual Preview Strip + Live Stylus Telemetry Badge
+    // Interactive Clickable Step Pills Bar (Jump directly to any of the 6 steps)
     Row(
-      modifier =
-        Modifier
-          .fillMaxWidth()
-          .height(54.dp)
-          .clip(RoundedCornerShape(12.dp))
-          .background(Color(0xFF0E121B))
-          .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
-          .padding(horizontal = 12.dp, vertical = 6.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.SpaceBetween,
+      modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-      Canvas(modifier = Modifier.weight(1f).fillMaxHeight()) {
-        val w = size.width
-        val h = size.height
-        val p = demoAnimProgress
-        when (step) {
-          0 -> {
-            // Animated wave + rotating barrel roll nib
-            val path = Path().apply {
-              moveTo(w * 0.05f, h * 0.5f)
-              cubicTo(w * 0.28f, h * 0.1f, w * 0.52f, h * 0.9f, w * 0.82f * p.coerceAtLeast(0.15f), h * 0.5f)
-            }
-            drawPath(path, color = Color(0xFF67C8EB), style = Stroke(width = 4f, cap = StrokeCap.Round))
-            val tipX = w * 0.82f * p.coerceAtLeast(0.15f)
-            drawCircle(Color(0xFF4C8DF6).copy(alpha = 0.3f), radius = 10f, center = Offset(tipX, h * 0.5f))
-          }
-          1, 2 -> {
-            // Animated freehand morphing into crisp rectangle & star
-            val cx = w * 0.45f
-            val cy = h * 0.5f
-            drawCircle(
-              color = if (p > 0.5f) Color(0xFF4CAF50) else Color(0xFF67C8EB),
-              radius = h * 0.36f,
-              center = Offset(cx, cy),
-              style = Stroke(width = if (p > 0.5f) 4f else 2.5f),
-            )
-          }
-          3 -> {
-            // Animated marching-ants circle-to-lasso loop
-            drawCircle(
-              color = SwitchBlue,
-              radius = h * 0.36f,
-              center = Offset(w * 0.45f, h * 0.5f),
-              style = Stroke(
-                width = 3f,
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), p * 24f),
-              ),
-            )
-          }
-          else -> {
-            // Animated glowing laser trail
-            val endX = w * (0.15f + 0.7f * p)
-            drawLine(
-              color = Color(0xFFF43F5E).copy(alpha = 0.35f),
-              start = Offset(w * 0.12f, h * 0.5f),
-              end = Offset(endX, h * 0.5f),
-              strokeWidth = 14f,
-              cap = StrokeCap.Round,
-            )
-            drawLine(
-              color = Color.White,
-              start = Offset(w * 0.12f, h * 0.5f),
-              end = Offset(endX, h * 0.5f),
-              strokeWidth = 3.5f,
-              cap = StrokeCap.Round,
+      stepLabels.forEachIndexed { idx, label ->
+        val isCurrent = idx == step
+        Box(
+          modifier =
+            Modifier
+              .clip(RoundedCornerShape(8.dp))
+              .background(
+                when {
+                  isCurrent && stepCompleted -> Color(0xFF4CAF50).copy(alpha = 0.26f)
+                  isCurrent -> Color(0xFF38BDF8).copy(alpha = 0.24f)
+                  idx < step -> Color(0xFF1E293B)
+                  else -> Color(0xFF151924)
+                }
+              )
+              .border(
+                1.dp,
+                when {
+                  isCurrent && stepCompleted -> Color(0xFF4CAF50)
+                  isCurrent -> Color(0xFF38BDF8)
+                  else -> Color.White.copy(alpha = 0.08f)
+                },
+                RoundedCornerShape(8.dp),
+              )
+              .clickable { onJumpToStep(idx) }
+              .padding(horizontal = 9.dp, vertical = 4.dp)
+              .testTag("tour_step_pill_$idx"),
+        ) {
+          Text(
+            text = label,
+            color = if (isCurrent) Color.White else TextSecondaryGray,
+            fontSize = 10.sp,
+            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+          )
+        }
+      }
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
+
+    // Optional Embedded Onboarding Video PiP Player + Animated Canvas Telemetry Strip
+    if (showVideoGuide) {
+      Row(
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .height(96.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color.Black)
+            .border(1.dp, Color(0xFF38BDF8).copy(alpha = 0.45f), RoundedCornerShape(12.dp)),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+          AndroidView(
+            factory = { ctx ->
+              VideoView(ctx).apply {
+                val uri = Uri.parse("android.resource://${ctx.packageName}/${R.raw.onboarding_video}")
+                setVideoURI(uri)
+                setOnPreparedListener { mp ->
+                  mp.isLooping = true
+                  mp.setVolume(0f, 0f)
+                  start()
+                }
+              }
+            },
+            modifier = Modifier.fillMaxSize(),
+          )
+        }
+        Column(
+          modifier = Modifier.width(150.dp).padding(10.dp),
+          verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+          Text(
+            text = "Pro Notes Reel",
+            color = Color.White,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+          )
+          Text(
+            text = "Triple-tap screen anytime for full-screen video!",
+            color = TextSecondaryGray,
+            fontSize = 9.5.sp,
+            lineHeight = 13.sp,
+          )
+          Box(
+            modifier =
+              Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(Color(0xFF38BDF8).copy(alpha = 0.22f))
+                .clickable(onClick = onOpenCinemaShowcase)
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+          ) {
+            Text(
+              text = "Full Screen ↗",
+              color = Color(0xFF67C8EB),
+              fontSize = 9.5.sp,
+              fontWeight = FontWeight.Bold,
             )
           }
         }
       }
+      Spacer(modifier = Modifier.height(8.dp))
+    } else {
+      Row(
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .height(50.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(Color(0xFF0E121B))
+            .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+      ) {
+        Canvas(modifier = Modifier.weight(1f).fillMaxHeight()) {
+          val w = size.width
+          val h = size.height
+          val p = demoAnimProgress
+          when (step) {
+            0 -> {
+              val path = Path().apply {
+                moveTo(w * 0.05f, h * 0.5f)
+                cubicTo(w * 0.28f, h * 0.1f, w * 0.52f, h * 0.9f, w * 0.82f * p.coerceAtLeast(0.15f), h * 0.5f)
+              }
+              drawPath(path, color = Color(0xFF67C8EB), style = Stroke(width = 4f, cap = StrokeCap.Round))
+              val tipX = w * 0.82f * p.coerceAtLeast(0.15f)
+              drawCircle(Color(0xFF4C8DF6).copy(alpha = 0.3f), radius = 10f, center = Offset(tipX, h * 0.5f))
+            }
+            1, 2 -> {
+              val cx = w * 0.45f
+              val cy = h * 0.5f
+              drawCircle(
+                color = if (p > 0.5f) Color(0xFF4CAF50) else Color(0xFF67C8EB),
+                radius = h * 0.36f,
+                center = Offset(cx, cy),
+                style = Stroke(width = if (p > 0.5f) 4f else 2.5f),
+              )
+            }
+            3 -> {
+              drawCircle(
+                color = SwitchBlue,
+                radius = h * 0.36f,
+                center = Offset(w * 0.45f, h * 0.5f),
+                style = Stroke(
+                  width = 3f,
+                  pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), p * 24f),
+                ),
+              )
+            }
+            else -> {
+              val endX = w * (0.15f + 0.7f * p)
+              drawLine(
+                color = Color(0xFFF43F5E).copy(alpha = 0.35f),
+                start = Offset(w * 0.12f, h * 0.5f),
+                end = Offset(endX, h * 0.5f),
+                strokeWidth = 14f,
+                cap = StrokeCap.Round,
+              )
+              drawLine(
+                color = Color.White,
+                start = Offset(w * 0.12f, h * 0.5f),
+                end = Offset(endX, h * 0.5f),
+                strokeWidth = 3.5f,
+                cap = StrokeCap.Round,
+              )
+            }
+          }
+        }
 
-      Spacer(modifier = Modifier.width(10.dp))
+        Spacer(modifier = Modifier.width(10.dp))
 
-      Column(horizontalAlignment = Alignment.End) {
-        Text(
-          text = selectedStylusBrand.label,
-          color = Color(0xFF67C8EB),
-          fontSize = 11.sp,
-          fontWeight = FontWeight.Bold,
-        )
-        Text(
-          text =
-            if (StylusInputTracker.isStylusActive) "Live Stylus Signal Active"
-            else "Auto-Calibrated & Ready",
-          color = if (StylusInputTracker.isStylusActive) Color(0xFF81C784) else TextSecondaryGray,
-          fontSize = 9.5.sp,
-        )
+        Column(horizontalAlignment = Alignment.End) {
+          Text(
+            text = selectedStylusBrand.label,
+            color = Color(0xFF67C8EB),
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+          )
+          Text(
+            text =
+              if (StylusInputTracker.isStylusActive) "Live Stylus Telemetry"
+              else "Triple-Tap = Video Reel",
+            color = if (StylusInputTracker.isStylusActive) Color(0xFF81C784) else TextSecondaryGray,
+            fontSize = 9.5.sp,
+          )
+        }
       }
+      Spacer(modifier = Modifier.height(8.dp))
     }
-
-    Spacer(modifier = Modifier.height(8.dp))
 
     Text(
       text = instruction,
       color = Color(0xFFD5D9E4),
-      fontSize = 12.sp,
-      lineHeight = 17.sp,
+      fontSize = 11.5.sp,
+      lineHeight = 16.5.sp,
     )
 
-    Spacer(modifier = Modifier.height(12.dp))
+    Spacer(modifier = Modifier.height(10.dp))
 
     Row(
       modifier = Modifier.fillMaxWidth(),
       horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      // Progress Dots (6 steps)
-      Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-        for (i in 0 until 6) {
-          Box(
-            modifier =
-              Modifier
-                .width(if (i == step) 20.dp else 7.dp)
-                .height(7.dp)
-                .clip(CircleShape)
-                .background(
-                  when {
-                    i == step && stepCompleted -> Color(0xFF4CAF50)
-                    i == step -> Color(0xFF4C8DF6)
-                    i < step -> Color(0xFF67C8EB).copy(alpha = 0.6f)
-                    else -> Color.White.copy(alpha = 0.2f)
-                  }
-                ),
-          )
-        }
+      // Auto-Demo Step Button (Demonstrates current step live on canvas!)
+      Box(
+        modifier =
+          Modifier
+            .height(34.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(Color(0xFF1E293B))
+            .border(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+            .clickable(onClick = onRunAutoDemo)
+            .padding(horizontal = 12.dp)
+            .testTag("interactive_tour_auto_demo_button"),
+        contentAlignment = Alignment.Center,
+      ) {
+        Text(
+          text = "✨ Auto-Demo Step",
+          color = Color(0xFF67C8EB),
+          fontSize = 11.5.sp,
+          fontWeight = FontWeight.Bold,
+        )
       }
 
       Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

@@ -12,10 +12,13 @@ enum class ShapeType(
     // Open Stroke Shapes
     LINE("Straight Line", isClosed = false, supportsFill = false, minPoints = 2),
     ARROW("Arrow", isClosed = false, supportsFill = false, minPoints = 3),
+    ANGLE_BRACKET("Angle Bracket (< >)", isClosed = false, supportsFill = false, minPoints = 3),
+    CURVE("Arc Curve", isClosed = false, supportsFill = false, minPoints = 3),
 
     // Closed Standard Shapes
     RECTANGLE("Rectangle", isClosed = true, supportsFill = true, minPoints = 4),
     SQUARE("Square", isClosed = true, supportsFill = true, minPoints = 4),
+    DIAMOND("Diamond", isClosed = true, supportsFill = true, minPoints = 4),
     CIRCLE("Circle", isClosed = true, supportsFill = true, minPoints = 8),
     ELLIPSE("Ellipse", isClosed = true, supportsFill = true, minPoints = 8),
     TRIANGLE("Triangle", isClosed = true, supportsFill = true, minPoints = 3),

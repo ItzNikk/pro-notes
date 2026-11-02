@@ -1,0 +1,89 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 620" width="100%" height="100%">
+  <defs>
+    <linearGradient id="libBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0B0F17" />
+      <stop offset="100%" stop-color="#151C2C" />
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="620" rx="22" fill="url(#libBg)" />
+
+  <!-- Left Sidebar -->
+  <rect x="0" y="0" width="240" height="620" rx="22" fill="#111827" />
+  <circle cx="42" cy="44" r="14" fill="#3B82F6" />
+  <text x="66" y="50" fill="#FFFFFF" font-family="sans-serif" font-size="20" font-weight="bold">Pro Notes</text>
+
+  <rect x="18" y="88" width="204" height="42" rx="10" fill="#2563EB" />
+  <text x="48" y="114" fill="#FFFFFF" font-family="sans-serif" font-size="14" font-weight="bold">Documents</text>
+  <text x="48" y="164" fill="#94A3B8" font-family="sans-serif" font-size="14">Favorites</text>
+  <text x="48" y="208" fill="#94A3B8" font-family="sans-serif" font-size="14">Shared</text>
+  <text x="48" y="252" fill="#94A3B8" font-family="sans-serif" font-size="14">Whiteboards</text>
+  <text x="48" y="296" fill="#94A3B8" font-family="sans-serif" font-size="14">Trash</text>
+
+  <!-- Top Header -->
+  <text x="275" y="56" fill="#F8FAFC" font-family="sans-serif" font-size="26" font-weight="bold">Documents</text>
+  <rect x="690" y="26" width="270" height="40" rx="10" fill="#1E293B" stroke="#334155" stroke-width="1" />
+  <text x="712" y="51" fill="#94A3B8" font-family="sans-serif" font-size="13">Search notes &amp; folders...</text>
+  <rect x="975" y="26" width="95" height="40" rx="10" fill="#2563EB" />
+  <text x="1002" y="51" fill="#FFFFFF" font-family="sans-serif" font-size="14" font-weight="bold">+ New</text>
+
+  <!-- Quick-Drop Folder Strip -->
+  <rect x="275" y="84" width="885" height="42" rx="10" fill="#0F172A" stroke="#38BDF8" stroke-width="1.5" />
+  <text x="292" y="110" fill="#38BDF8" font-family="sans-serif" font-size="11" font-weight="bold">DROP INTO:</text>
+  <rect x="378" y="92" width="135" height="26" rx="8" fill="#064E3B" stroke="#34D399" stroke-width="1.5" />
+  <text x="396" y="109" fill="#6EE7B7" font-family="sans-serif" font-size="12" font-weight="bold">📁 Physics Lab</text>
+  <rect x="526" y="92" width="145" height="26" rx="8" fill="#311042" stroke="#A855F7" stroke-width="1" />
+  <text x="544" y="109" fill="#E9D5FF" font-family="sans-serif" font-size="12" font-weight="bold">📁 Design Studio</text>
+  <rect x="684" y="92" width="145" height="26" rx="8" fill="#3B2510" stroke="#F59E0B" stroke-width="1" />
+  <text x="702" y="109" fill="#FDE68A" font-family="sans-serif" font-size="12" font-weight="bold">📁 Exam Review</text>
+
+  <!-- Folder Card 1 (Active Drop Target) -->
+  <rect x="275" y="150" width="155" height="196" rx="16" fill="#064E3B" fill-opacity="0.45" stroke="#34D399" stroke-width="2.5" />
+  <rect x="305" y="200" width="95" height="72" rx="10" fill="#10B981" />
+  <text x="295" y="372" fill="#F8FAFC" font-family="sans-serif" font-size="14" font-weight="bold">Physics Lab</text>
+  <text x="318" y="392" fill="#34D399" font-family="sans-serif" font-size="12" font-weight="bold">Drop Target ✓</text>
+
+  <!-- Folder Card 2 (Stylus Color Synced) -->
+  <rect x="455" y="150" width="155" height="196" rx="16" fill="#3B1D5E" fill-opacity="0.35" stroke="#A855F7" stroke-width="1.5" />
+  <rect x="485" y="200" width="95" height="72" rx="10" fill="#A855F7" />
+  <text x="482" y="372" fill="#F8FAFC" font-family="sans-serif" font-size="14" font-weight="bold">Design Studio</text>
+  <text x="498" y="392" fill="#94A3B8" font-family="sans-serif" font-size="12">4 items</text>
+
+  <!-- Notebook Card with Instant Drag Handle -->
+  <rect x="635" y="150" width="155" height="196" rx="14" fill="#1E293B" stroke="#38BDF8" stroke-width="2" />
+  <rect x="635" y="150" width="20" height="196" rx="6" fill="#0F172A" />
+  <rect x="647" y="312" width="60" height="24" rx="6" fill="#090D16" />
+  <text x="656" y="328" fill="#38BDF8" font-family="sans-serif" font-size="11" font-weight="bold">⋮⋮ Drag</text>
+  <text x="646" y="372" fill="#F8FAFC" font-family="sans-serif" font-size="14" font-weight="bold">Electrodynamics</text>
+  <text x="665" y="392" fill="#94A3B8" font-family="sans-serif" font-size="12">12p • Today</text>
+
+  <!-- Folder Stylus Color Studio Modal Preview -->
+  <rect x="820" y="148" width="340" height="430" rx="18" fill="#1E293B" stroke="#475569" stroke-width="1.5" />
+  <text x="844" y="182" fill="#FFFFFF" font-family="sans-serif" font-size="16" font-weight="bold">Folder Stylus Color Studio</text>
+  <text x="844" y="202" fill="#94A3B8" font-family="sans-serif" font-size="11">Synced with your Stylus Ink &amp; Studio Palette</text>
+
+  <text x="844" y="236" fill="#38BDF8" font-family="sans-serif" font-size="10" font-weight="bold">STYLUS INK &amp; STUDIO PALETTE</text>
+  <circle cx="858" cy="260" r="12" fill="#38BDF8" stroke="#FFFFFF" stroke-width="2.5" />
+  <circle cx="890" cy="260" r="12" fill="#A855F7" />
+  <circle cx="922" cy="260" r="12" fill="#EC4899" />
+  <circle cx="954" cy="260" r="12" fill="#10B981" />
+  <circle cx="986" cy="260" r="12" fill="#F59E0B" />
+  <circle cx="1018" cy="260" r="12" fill="#EF4444" />
+  <circle cx="1050" cy="260" r="12" fill="#6366F1" />
+
+  <rect x="844" y="292" width="292" height="195" rx="12" fill="#0F172A" />
+  <text x="860" y="318" fill="#E2E8F0" font-family="sans-serif" font-size="11" font-weight="bold">Hue (198°)        + Save to Stylus Palette</text>
+  <rect x="860" y="328" width="260" height="8" rx="4" fill="#38BDF8" />
+  <text x="860" y="366" fill="#E2E8F0" font-family="sans-serif" font-size="11" font-weight="bold">Saturation (82%)</text>
+  <rect x="860" y="376" width="260" height="8" rx="4" fill="#38BDF8" />
+  <text x="860" y="414" fill="#E2E8F0" font-family="sans-serif" font-size="11" font-weight="bold">Brightness (95%)</text>
+  <rect x="860" y="424" width="260" height="8" rx="4" fill="#38BDF8" />
+
+  <rect x="975" y="516" width="160" height="38" rx="10" fill="#2563EB" />
+  <text x="998" y="540" fill="#FFFFFF" font-family="sans-serif" font-size="13" font-weight="bold">Apply Folder Color</text>
+
+  <!-- Floating Drag Pill -->
+  <rect x="330" y="435" width="300" height="58" rx="14" fill="#0F172A" stroke="#34D399" stroke-width="2" />
+  <text x="355" y="460" fill="#FFFFFF" font-family="sans-serif" font-size="13" font-weight="bold">📘 Electrodynamics</text>
+  <text x="355" y="480" fill="#6EE7B7" font-family="sans-serif" font-size="11">Release to move into "Physics Lab"</text>
+</svg>

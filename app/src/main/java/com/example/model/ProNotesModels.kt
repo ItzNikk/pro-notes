@@ -94,6 +94,7 @@ enum class WritingSubTool(val label: String) {
   HIGHLIGHTER("Highlighter"),
   TAPE("Study Tape"),
   DRAW_SHAPE("Shapes"),
+  RULER("Ruler"),
 }
 
 enum class ToolbarDockPosition(val label: String) {
@@ -114,7 +115,11 @@ enum class PageScrollDirection(val label: String) {
 enum class PenStyle(val title: String, val subtitle: String) {
   FOUNTAIN("Fountain Pen", "Pressure-sensitive calligraphy"),
   BALL("Ball Pen", "Uniform stroke width"),
+  FINELINER("Fineliner", "Ultra-crisp 0.4mm technical liner"),
   BRUSH("Brush Pen", "High pressure & tilt expression"),
+  CALLIGRAPHY("Calligraphy Nib", "45° angled italic ribbon nib"),
+  MARKER("Chisel Marker", "Bold flat-edge studio marker"),
+  NEON_GLOW("Neon Glow", "Luminous cyber glow ink"),
 }
 
 enum class StrokePattern(val label: String) {
@@ -135,15 +140,18 @@ enum class EraserMode(val label: String) {
 enum class ShapeKind(val label: String) {
   LINE("Line"),
   ARROW("Arrow"),
+  ANGLE_BRACKET("Angle (< >)"),
   CURVE("Arc Curve"),
   CIRCLE("Circle"),
   OVAL("Oval / Ellipse"),
   TRIANGLE("Triangle"),
   RECTANGLE("Rectangle"),
+  SQUARE("Square"),
   DIAMOND("Diamond"),
   PENTAGON("Pentagon"),
   HEXAGON("Hexagon"),
   STAR("Star"),
+  HEART("Heart"),
 }
 
 enum class LaserMode(val label: String) {
@@ -223,6 +231,7 @@ data class DrawnStroke(
   val isShape: Boolean = false,
   val shapeKind: ShapeKind? = null,
   val shapeFill: Boolean = false,
+  val shapeFillOpacity: Float = 0.35f,
   val shapeControlPoints: List<Offset> = emptyList(),
   val zIndex: Int = 0,
   val timestampMs: Long = System.currentTimeMillis(),
@@ -364,6 +373,38 @@ fun buildShapePreviewPoints(
       }
       (shaftPts + listOf(leftWing, last, rightWing)) to listOf(first, last)
     }
+    ShapeKind.ANGLE_BRACKET -> {
+      val apex =
+        if (points.size >= 5) {
+          var best = points[points.size / 2]
+          var maxDist = -1f
+          val dx = last.x - first.x
+          val dy = last.y - first.y
+          val lenSq = dx * dx + dy * dy
+          for (i in 1 until points.size - 1) {
+            val p = points[i]
+            val t = if (lenSq > 0f) (((p.x - first.x) * dx + (p.y - first.y) * dy) / lenSq).coerceIn(0f, 1f) else 0f
+            val proj = Offset(first.x + t * dx, first.y + t * dy)
+            val d = (p - proj).getDistance()
+            if (d > maxDist) {
+              maxDist = d
+              best = p
+            }
+          }
+          if (maxDist > 12f) best else Offset(maxX, cy)
+        } else {
+          Offset(maxX, cy)
+        }
+      val leg1 = (0..12).map { idx ->
+        val t = idx / 12f
+        Offset(first.x + (apex.x - first.x) * t, first.y + (apex.y - first.y) * t)
+      }
+      val leg2 = (1..12).map { idx ->
+        val t = idx / 12f
+        Offset(apex.x + (last.x - apex.x) * t, apex.y + (last.y - apex.y) * t)
+      }
+      (leg1 + leg2) to listOf(first, apex, last)
+    }
     ShapeKind.CURVE -> {
       val mid = points[points.size / 2]
       val ctrl = Offset(
@@ -467,6 +508,27 @@ fun buildShapePreviewPoints(
         )
       }
       interpolateClosedPolygon(vertices, 5) to vertices
+    }
+    ShapeKind.SQUARE -> {
+      val s = minOf(rx, ry)
+      val tl = Offset(cx - s, cy - s)
+      val tr = Offset(cx + s, cy - s)
+      val br = Offset(cx + s, cy + s)
+      val bl = Offset(cx - s, cy + s)
+      val vertices = listOf(tl, tr, br, bl)
+      interpolateClosedPolygon(vertices, 10) to vertices
+    }
+    ShapeKind.HEART -> {
+      val sampleCount = 48
+      val heartPts = (0..sampleCount).map { idx ->
+        val t = (idx.toDouble() / sampleCount.toDouble()) * 2.0 * Math.PI
+        val sinT = kotlin.math.sin(t)
+        val hx = (16.0 * sinT * sinT * sinT).toFloat()
+        val hy = -(13.0 * kotlin.math.cos(t) - 5.0 * kotlin.math.cos(2.0 * t) - 2.0 * kotlin.math.cos(3.0 * t) - kotlin.math.cos(4.0 * t)).toFloat()
+        Offset(cx + (hx / 16f) * rx, cy + (hy / 16f) * ry)
+      }
+      val handles = listOf(Offset(cx, cy - ry), Offset(cx, cy + ry))
+      heartPts to handles
     }
   }
 }

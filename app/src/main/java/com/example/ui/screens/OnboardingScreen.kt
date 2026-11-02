@@ -283,7 +283,10 @@ fun OnboardingScreen(
         modifier = Modifier.widthIn(max = 460.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
       ) {
-        // Hardware Stylus Auto-Detection Badge during setup
+        var selectedBrand by remember(detectedStylusInfo) { mutableStateOf(detectedStylusInfo.first) }
+        var showStylusPicker by remember { mutableStateOf(true) }
+
+        // Hardware Stylus Auto-Detection Badge during setup (tap to expand/collapse brand selector)
         Row(
           modifier =
             Modifier
@@ -292,6 +295,7 @@ fun OnboardingScreen(
               .clip(RoundedCornerShape(20.dp))
               .background(Color(0xCC111C2D))
               .border(1.dp, Color(0xFF38BDF8).copy(alpha = 0.45f), RoundedCornerShape(20.dp))
+              .clickable { showStylusPicker = !showStylusPicker }
               .padding(horizontal = 14.dp, vertical = 6.dp)
               .testTag("onboarding_detected_stylus_badge"),
           verticalAlignment = Alignment.CenterVertically,
@@ -305,7 +309,7 @@ fun OnboardingScreen(
                 .background(Color(0xFF34D399)),
           )
           Text(
-            text = "Stylus Setup Ready: ${detectedStylusInfo.first.label}",
+            text = "Stylus Setup Ready: ${selectedBrand.label}",
             color = Color(0xFF7DD3FC),
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
@@ -343,7 +347,87 @@ fun OnboardingScreen(
               .testTag("onboarding_subtitle"),
         )
 
-        Spacer(modifier = Modifier.height(28.dp))
+        Spacer(modifier = Modifier.height(18.dp))
+
+        AnimatedVisibility(
+          visible = showStylusPicker,
+          enter = fadeIn(tween(220)),
+          exit = fadeOut(tween(180)),
+        ) {
+          Column(
+            modifier =
+              Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0xCC111A2B))
+                .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(16.dp))
+                .padding(horizontal = 14.dp, vertical = 12.dp)
+                .testTag("onboarding_stylus_setup_card"),
+            horizontalAlignment = Alignment.CenterHorizontally,
+          ) {
+            Text(
+              text = "Choose Your Stylus Pen Profile",
+              color = Color(0xFF93C5FD),
+              fontSize = 12.5.sp,
+              fontWeight = FontWeight.SemiBold,
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Row(
+              modifier = Modifier.fillMaxWidth(),
+              horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+            ) {
+              listOf(
+                StylusPenBrand.SAMSUNG_S_PEN,
+                StylusPenBrand.LENOVO_PRECISION_PEN,
+                StylusPenBrand.XIAOMI_SMART_PEN,
+                StylusPenBrand.GENERIC_STYLUS,
+              ).forEach { brand ->
+                val isSelected = selectedBrand == brand
+                Box(
+                  modifier =
+                    Modifier
+                      .clip(RoundedCornerShape(10.dp))
+                      .background(
+                        if (isSelected) NewButtonBlue.copy(alpha = 0.32f)
+                        else Color.White.copy(alpha = 0.07f)
+                      )
+                      .border(
+                        1.dp,
+                        if (isSelected) Color(0xFF38BDF8) else Color.White.copy(alpha = 0.14f),
+                        RoundedCornerShape(10.dp),
+                      )
+                      .clickable {
+                        selectedBrand = brand
+                        onStylusAutoDetected(brand)
+                      }
+                      .padding(horizontal = 9.dp, vertical = 6.dp)
+                      .testTag("onboarding_stylus_${brand.name.lowercase()}"),
+                ) {
+                  Text(
+                    text =
+                      when (brand) {
+                        StylusPenBrand.SAMSUNG_S_PEN -> "S Pen"
+                        StylusPenBrand.LENOVO_PRECISION_PEN -> "Lenovo"
+                        StylusPenBrand.XIAOMI_SMART_PEN -> "Xiaomi"
+                        else -> "Universal"
+                      },
+                    color = if (isSelected) Color.White else Color.White.copy(alpha = 0.72f),
+                    fontSize = 11.5.sp,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+                  )
+                }
+              }
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(
+              text = selectedBrand.subtitle,
+              color = Color.White.copy(alpha = 0.68f),
+              fontSize = 11.sp,
+              textAlign = TextAlign.Center,
+            )
+          }
+        }
 
         AnimatedVisibility(
           visible = showTourOverlay,
@@ -464,6 +548,23 @@ fun ThankYouScreen(
   modifier: Modifier = Modifier,
 ) {
   var videoFailed by remember { mutableStateOf(false) }
+  var pureVideoCinemaMode by remember { mutableStateOf(false) }
+  var tapCount by remember { mutableStateOf(0) }
+  var lastTapMs by remember { mutableStateOf(0L) }
+
+  fun handleScreenTap() {
+    val now = System.currentTimeMillis()
+    if (now - lastTapMs <= 550L) {
+      tapCount += 1
+    } else {
+      tapCount = 1
+    }
+    lastTapMs = now
+    if (tapCount >= 3) {
+      tapCount = 0
+      pureVideoCinemaMode = !pureVideoCinemaMode
+    }
+  }
 
   val infiniteTransition = rememberInfiniteTransition(label = "rainbowThankYouTransition")
   val rainbowPhase by infiniteTransition.animateFloat(
@@ -542,6 +643,12 @@ fun ThankYouScreen(
               ),
           ),
         )
+        .clickable(
+          interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+          indication = null,
+        ) {
+          handleScreenTap()
+        }
         .testTag("thank_you_screen"),
   ) {
     if (!videoFailed) {
@@ -624,85 +731,142 @@ fun ThankYouScreen(
       )
     }
 
-    // Same dark gradient overlay as Welcome Screen so the rainbow Thank You shines vividly
-    Box(
-      modifier =
-        Modifier
-          .fillMaxSize()
-          .background(
-            Brush.verticalGradient(
-              colorStops =
-                arrayOf(
-                  0.0f to Color(0x66060A12),
-                  0.45f to Color(0x8C070C17),
-                  0.78f to Color(0xD9070C17),
-                  1.0f to Color(0xF2060A12),
-                ),
+    if (!pureVideoCinemaMode) {
+      // Dark gradient overlay so the rainbow Thank You card shines vividly
+      Box(
+        modifier =
+          Modifier
+            .fillMaxSize()
+            .background(
+              Brush.verticalGradient(
+                colorStops =
+                  arrayOf(
+                    0.0f to Color(0x66060A12),
+                    0.45f to Color(0x8C070C17),
+                    0.78f to Color(0xD9070C17),
+                    1.0f to Color(0xF2060A12),
+                  ),
+              ),
             ),
-          ),
-    )
+      )
 
-    Column(
-      modifier =
-        Modifier
-          .fillMaxSize()
-          .padding(horizontal = 28.dp, vertical = 48.dp),
-      verticalArrangement = Arrangement.Center,
-      horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
       Column(
         modifier =
           Modifier
-            .widthIn(max = 460.dp)
-            .clip(RoundedCornerShape(28.dp))
-            .background(Color(0xBF0B1222))
-            .border(1.5.dp, activeRainbowColor.copy(alpha = 0.65f), RoundedCornerShape(28.dp))
-            .padding(horizontal = 28.dp, vertical = 34.dp),
+            .fillMaxSize()
+            .padding(horizontal = 28.dp, vertical = 48.dp),
+        verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
       ) {
+        Column(
+          modifier =
+            Modifier
+              .widthIn(max = 460.dp)
+              .clip(RoundedCornerShape(28.dp))
+              .background(Color(0xBF0B1222))
+              .border(1.5.dp, activeRainbowColor.copy(alpha = 0.65f), RoundedCornerShape(28.dp))
+              .padding(horizontal = 28.dp, vertical = 34.dp),
+          horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+          Box(
+            modifier =
+              Modifier
+                .clip(RoundedCornerShape(50))
+                .background(Color.White.copy(alpha = 0.10f))
+                .clickable { pureVideoCinemaMode = true }
+                .padding(horizontal = 12.dp, vertical = 5.dp),
+          ) {
+            Text(
+              text = "🎬 Triple-tap or tap here for Pure Video View",
+              color = Color(0xFF67C8EB),
+              fontSize = 11.sp,
+              fontWeight = FontWeight.SemiBold,
+            )
+          }
+
+          Spacer(modifier = Modifier.height(14.dp))
+
+          Text(
+            text = "Thank You",
+            style =
+              TextStyle(
+                brush = rainbowBrush,
+                fontSize = 46.sp,
+                fontWeight = FontWeight.ExtraBold,
+                textAlign = TextAlign.Center,
+                lineHeight = 52.sp,
+              ),
+            color = activeRainbowColor,
+            modifier = Modifier.testTag("thank_you_rainbow_title"),
+          )
+
+          Spacer(modifier = Modifier.height(14.dp))
+
+          Text(
+            text = "Your support keeps Pro Notes fast, independent, and built with care for every note-taker.",
+            color = Color.White.copy(alpha = 0.88f),
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.Center,
+            lineHeight = 23.sp,
+            modifier = Modifier.testTag("thank_you_subtitle"),
+          )
+
+          Spacer(modifier = Modifier.height(28.dp))
+
+          Box(
+            modifier =
+              Modifier
+                .fillMaxWidth()
+                .height(50.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(rainbowBrush)
+                .clickable(onClick = onClose)
+                .testTag("thank_you_close_button"),
+            contentAlignment = Alignment.Center,
+          ) {
+            Text(
+              text = "Back to Pro Notes",
+              color = Color.White,
+              fontSize = 15.5.sp,
+              fontWeight = FontWeight.Bold,
+            )
+          }
+        }
+      }
+    } else {
+      // Pure Cinema Video Mode floating control pill at the bottom
+      Row(
+        modifier =
+          Modifier
+            .align(Alignment.BottomCenter)
+            .padding(bottom = 32.dp)
+            .clip(RoundedCornerShape(50))
+            .background(Color(0xCC0B1222))
+            .border(1.dp, activeRainbowColor.copy(alpha = 0.7f), RoundedCornerShape(50))
+            .padding(horizontal = 18.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+      ) {
         Text(
-          text = "Thank You",
-          style =
-            TextStyle(
-              brush = rainbowBrush,
-              fontSize = 46.sp,
-              fontWeight = FontWeight.ExtraBold,
-              textAlign = TextAlign.Center,
-              lineHeight = 52.sp,
-            ),
-          color = activeRainbowColor,
-          modifier = Modifier.testTag("thank_you_rainbow_title"),
+          text = "🎬 Pure Cinema Reel (3x tap to show card)",
+          color = Color.White,
+          fontSize = 12.sp,
+          fontWeight = FontWeight.SemiBold,
+          modifier = Modifier.clickable { pureVideoCinemaMode = false },
         )
-
-        Spacer(modifier = Modifier.height(14.dp))
-
-        Text(
-          text = "Your support keeps Pro Notes fast, independent, and built with care for every note-taker.",
-          color = Color.White.copy(alpha = 0.88f),
-          fontSize = 16.sp,
-          fontWeight = FontWeight.Medium,
-          textAlign = TextAlign.Center,
-          lineHeight = 23.sp,
-          modifier = Modifier.testTag("thank_you_subtitle"),
-        )
-
-        Spacer(modifier = Modifier.height(28.dp))
-
         Box(
           modifier =
             Modifier
-              .fillMaxWidth()
-              .height(50.dp)
-              .clip(RoundedCornerShape(14.dp))
+              .clip(RoundedCornerShape(50))
               .background(rainbowBrush)
               .clickable(onClick = onClose)
-              .testTag("thank_you_close_button"),
-          contentAlignment = Alignment.Center,
+              .padding(horizontal = 12.dp, vertical = 5.dp),
         ) {
           Text(
-            text = "Back to Pro Notes",
+            text = "Exit",
             color = Color.White,
-            fontSize = 15.5.sp,
+            fontSize = 11.5.sp,
             fontWeight = FontWeight.Bold,
           )
         }
