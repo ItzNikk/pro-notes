@@ -1188,8 +1188,6 @@ fun ExportAndSharePopover(
   onExportFullPdf: () -> Unit,
   onExportCurrentPagePng: () -> Unit,
   onToggleWatermark: (Boolean) -> Unit,
-  onCyclePaperColorTheme: () -> Unit,
-  onOpenSecurityVault: () -> Unit,
   onDismiss: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -1316,35 +1314,6 @@ fun ExportAndSharePopover(
 
     HorizontalDivider(modifier = Modifier.padding(vertical = 10.dp), color = PopoverDivider)
 
-    // Paper Color Tint QoL
-    Row(
-      modifier =
-        Modifier
-          .fillMaxWidth()
-          .height(34.dp)
-          .clip(RoundedCornerShape(8.dp))
-          .background(PopoverInnerBg)
-          .clickable(onClick = onCyclePaperColorTheme)
-          .padding(horizontal = 10.dp),
-      horizontalArrangement = Arrangement.SpaceBetween,
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
-      Text(
-        text = "Paper Tint: ${document?.paperColorTheme?.label ?: PaperColorTheme.PURE_WHITE.label}",
-        color = TextPrimaryWhite,
-        fontSize = 11.5.sp,
-        fontWeight = FontWeight.Medium,
-      )
-      Text(
-        text = "Cycle Tint →",
-        color = Color(0xFF67C8EB),
-        fontSize = 11.sp,
-        fontWeight = FontWeight.SemiBold,
-      )
-    }
-
-    Spacer(modifier = Modifier.height(8.dp))
-
     // Confidential Watermark Toggle
     Row(
       modifier =
@@ -1375,35 +1344,6 @@ fun ExportAndSharePopover(
         color = if (watermarkConfidentialExports) Color(0xFF34C759) else TextSecondaryGray,
         fontSize = 11.sp,
         fontWeight = FontWeight.Bold,
-      )
-    }
-
-    Spacer(modifier = Modifier.height(8.dp))
-
-    Row(
-      modifier =
-        Modifier
-          .fillMaxWidth()
-          .height(34.dp)
-          .clip(RoundedCornerShape(8.dp))
-          .background(Color(0xFF17325A))
-          .border(1.dp, SwitchBlue.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
-          .clickable(onClick = onOpenSecurityVault)
-          .padding(horizontal = 10.dp),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.Center,
-    ) {
-      SecurityVaultShieldIcon(
-        tint = Color(0xFF67C8EB),
-        isLocked = document?.isLockedVault == true,
-        modifier = Modifier.size(15.dp),
-      )
-      Spacer(modifier = Modifier.width(6.dp))
-      Text(
-        text = "Open Cybersecurity Vault & PIN Lock...",
-        color = Color(0xFF67C8EB),
-        fontSize = 11.5.sp,
-        fontWeight = FontWeight.SemiBold,
       )
     }
   }

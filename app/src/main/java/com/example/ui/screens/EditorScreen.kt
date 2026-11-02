@@ -148,22 +148,18 @@ import com.example.model.PaperColorTheme
 import com.example.model.PaperTemplate
 import com.example.model.PenStyle
 import com.example.model.PrimaryTool
-import com.example.model.RulerState
 import com.example.model.ShapeKind
 import com.example.model.StrokePattern
 import com.example.model.ToolbarDockPosition
 import com.example.model.WritingSubTool
 import com.example.model.isClosedCircleLoop
 import com.example.ui.components.AddPageDocumentIcon
-import com.example.ui.components.AiHandwritingAssistPopover
-import com.example.ui.components.AudioRecordingTimelineBar
 import com.example.ui.components.DottedColorRingIcon
 import com.example.ui.components.ElementsPickerPopover
 import com.example.ui.components.EraserSettingsPopover
 import com.example.ui.components.ExportAndSharePopover
 import com.example.ui.components.ExportShareBoxIcon
 import com.example.ui.components.HighlighterSettingsPopover
-import com.example.ui.components.InteractiveRulerOverlay
 import com.example.ui.components.LassoFloatingMenuPill
 import com.example.ui.components.LassoSettingsPopover
 import com.example.ui.components.MoreCircleDotsIcon
@@ -172,8 +168,6 @@ import com.example.ui.components.PenColorPopover
 import com.example.ui.components.PenSettingsPopover
 import com.example.ui.components.PrimaryToolCustomIcon
 import com.example.ui.components.RedoCurvedArrowIcon
-import com.example.ui.components.SecurityVaultPopover
-import com.example.ui.components.SecurityVaultShieldIcon
 import com.example.ui.components.ShapeSettingsPopover
 import com.example.ui.components.SidebarThumbnailsIcon
 import com.example.ui.components.StrokePatternIcon
@@ -275,16 +269,10 @@ fun EditorScreen(
   val lassoSelectedImageIds = uiState.lassoSelectedImageIds
   val activePopover = uiState.activePopover
   val isPageSidebarOpen = uiState.isPageSidebarOpen
-  val rulerState = uiState.rulerState
   val isZoomWindowVisible = uiState.isZoomWindowVisible
   val zoomTargetBoxOffset = uiState.zoomTargetBoxOffset
-  val isAudioRecording = uiState.isRecordingAudio
-  val isAudioPlayingReplay = uiState.isPlayingAudioReplay
-  val audioRecordedSeconds = uiState.recordedAudioSeconds
-  val isAudioBarVisible = uiState.isAudioBarVisible
   val laserTrails = uiState.laserTrails
   val isEyedropperActive = uiState.isEyedropperActive
-  val privacyScreenShieldEnabled = uiState.privacyScreenShieldEnabled
   val watermarkConfidentialExports = uiState.watermarkConfidentialExports
   val statusToastMessage = uiState.statusToastMessage
   val customTemplates = uiState.customTemplates
@@ -299,11 +287,7 @@ fun EditorScreen(
   val onSelectTab: (String) -> Unit = viewModel::openDocument
   val onCloseTab: (String) -> Unit = viewModel::closeTab
   val onAddNewNotebookTab: () -> Unit = { viewModel.togglePopover(ActivePopover.NEW_NOTE_DIALOG) }
-  val onSetVaultPin: (String) -> Unit = viewModel::lockCurrentNotebookWithPin
-  val onRemoveVaultLock: () -> Unit = viewModel::removeCurrentNotebookLock
-  val onTogglePrivacyScreenShield: (Boolean) -> Unit = viewModel::togglePrivacyScreenShield
   val onToggleWatermark: (Boolean) -> Unit = viewModel::toggleWatermarkConfidentialExports
-  val onCyclePaperColorTheme: () -> Unit = viewModel::cyclePaperColorTheme
   val onToggleReadOnlyMode: () -> Unit = viewModel::toggleReadOnlyMode
   val onSelectPrimaryTool: (PrimaryTool) -> Unit = viewModel::selectPrimaryTool
   val onSelectWritingSubTool: (WritingSubTool) -> Unit = viewModel::selectWritingSubTool
@@ -373,14 +357,8 @@ fun EditorScreen(
   val onToggleStickyNoteExpanded: (String) -> Unit = viewModel::toggleStickyNoteExpanded
   val onUpdateStickyNoteText: (String, String) -> Unit = viewModel::updateStickyNoteText
   val onDeleteStickyNote: (String) -> Unit = viewModel::deleteStickyNote
-  val onToggleRuler: () -> Unit = viewModel::toggleRuler
-  val onMoveRuler: (Offset) -> Unit = viewModel::moveRuler
-  val onRotateRuler: (Float) -> Unit = viewModel::rotateRuler
   val onToggleZoomWindow: () -> Unit = viewModel::toggleZoomWindow
   val onAdvanceZoomBox: (Float, Float) -> Unit = viewModel::advanceZoomTargetBox
-  val onToggleAudioRecording: () -> Unit = viewModel::toggleAudioRecording
-  val onToggleAudioReplay: () -> Unit = viewModel::toggleAudioReplay
-  val onToggleAudioBar: () -> Unit = viewModel::toggleAudioBar
   val onAddLaserTrail: (List<Offset>) -> Unit = viewModel::addLaserTrail
   val onPruneExpiredLaserTrails: () -> Unit = viewModel::pruneExpiredLaserTrails
   val onAddStroke: (List<Offset>, List<Float>, Boolean) -> Unit = viewModel::addStroke
@@ -465,12 +443,6 @@ fun EditorScreen(
     }
   }
 
-  // Audio recording timer
-  LaunchedEffect(isAudioRecording) {
-    while (isAudioRecording) {
-      delay(1000L)
-    }
-  }
 
   // Auto-clear toast message
   LaunchedEffect(statusToastMessage) {
@@ -503,7 +475,6 @@ fun EditorScreen(
           primaryTool = primaryTool,
           enabledToolbarTools = enabledToolbarTools,
           isBookmarked = currentPage.isBookmarked,
-          isVaultLocked = activeDocument?.isLockedVault == true,
           isWhiteboard = isWhiteboard,
           onlyDrawWithStylus = onlyDrawWithStylus,
           pageScrollDirection = pageScrollDirection,
@@ -521,18 +492,14 @@ fun EditorScreen(
           },
           onTogglePageSidebar = onTogglePageSidebar,
           onToggleBookmark = onTogglePageBookmark,
-          onToggleRuler = onToggleRuler,
           onToggleZoomWindow = onToggleZoomWindow,
-          onToggleAudioBar = onToggleAudioBar,
           onOpenTimeKeeper = { onTogglePopover(ActivePopover.TIME_KEEPER) },
           onOpenToolbarCustomize = { onTogglePopover(ActivePopover.TOOLBAR_CUSTOMIZE) },
           onOpenExportShare = { onTogglePopover(ActivePopover.EXPORT_SHARE) },
-          onOpenSecurityVault = { onTogglePopover(ActivePopover.SECURITY_VAULT) },
           onOpenAddPagePopover = { onTogglePopover(ActivePopover.ADD_PAGE_DIALOG) },
           onTogglePageScrollDirection = onTogglePageScrollDirection,
           onImportPdfFromDevice = onImportPdfFromDevice,
           onCyclePaperTemplate = onCyclePaperTemplate,
-          onCyclePaperColorTheme = onCyclePaperColorTheme,
           onClearPageStrokes = onClearPageStrokes,
           onToggleOnlyDrawWithStylus = { onToggleOnlyDrawWithStylus(!onlyDrawWithStylus) },
           onOpenSettings = onOpenSettings,
@@ -586,18 +553,6 @@ fun EditorScreen(
         )
       }
 
-      // 4. OPTIONAL DOCKED AUDIO RECORDING TIMELINE BAR
-      if (isAudioBarVisible) {
-        AudioRecordingTimelineBar(
-          isRecording = isAudioRecording,
-          isPlayingReplay = isAudioPlayingReplay,
-          recordedSeconds = audioRecordedSeconds,
-          strokeCount = currentPage.strokes.size,
-          onToggleRecord = onToggleAudioRecording,
-          onToggleReplay = onToggleAudioReplay,
-          onCloseAudioBar = onToggleAudioBar,
-        )
-      }
 
       // 5. MAIN WORKSPACE AREA (Sidebar + Clipped Canvas Viewport)
       Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -859,7 +814,6 @@ fun EditorScreen(
                 val onlyStylusRef = rememberUpdatedState(onlyDrawWithStylus)
                 val palmSensRef = rememberUpdatedState(palmRejectionSensitivity)
                 val leftHandedRef = rememberUpdatedState(leftHandedPosture)
-                val rulerStateRef = rememberUpdatedState(rulerState)
                 val showLassoRef = rememberUpdatedState(showLassoSelection)
                 val eyedropperRef = rememberUpdatedState(isEyedropperActive)
 
@@ -975,7 +929,6 @@ fun EditorScreen(
                           val currentBarrelButtonActive = barrelButtonActiveRef.value
                           val currentBarrelAction = barrelActionRef.value
                           val currentPressureSens = pressureSensRef.value
-                          val currentRuler = rulerStateRef.value
                           val currentShowLasso = showLassoRef.value
                           val currentEyedropper = eyedropperRef.value
 
@@ -1269,18 +1222,10 @@ fun EditorScreen(
                                   circleLassoHoldProgress = 0f
                                 }
                                 val constrainedPos =
-                                  when {
-                                    currentRuler.isVisible -> {
-                                      snapPointAlongRuler(
-                                        start = startPoint,
-                                        current = rawPos,
-                                        angleDegrees = currentRuler.angleDegrees,
-                                      )
-                                    }
-                                    isHighlighterSub && currentHighlighterStraight -> {
-                                      Offset(rawPos.x, startPoint.y)
-                                    }
-                                    else -> rawPos
+                                  if (isHighlighterSub && currentHighlighterStraight) {
+                                    Offset(rawPos.x, startPoint.y)
+                                  } else {
+                                    rawPos
                                   }
 
                                 // Goodnotes & Samsung Notes Draw-and-Hold behavior:
@@ -1396,14 +1341,17 @@ fun EditorScreen(
                                         (totalDisplacement > 22f || inProgressPoints.size >= 10) &&
                                         stationaryMs > 320L
                                     ) {
+                                      val rawList = inProgressPoints.toList()
+                                      val snappedDirect = com.example.model.ShapeSnapper.snap(rawList)
                                       val detectedKind =
-                                        viewModel.autoDetectShapeKind(inProgressPoints.toList())
+                                        viewModel.autoDetectShapeKind(rawList)
                                       snappedHoldShapeKind = detectedKind
                                       val snappedGeom =
-                                        com.example.model.buildShapePreviewPoints(
-                                          inProgressPoints.toList(),
-                                          detectedKind,
-                                        ).first
+                                        snappedDirect
+                                          ?: com.example.model.buildShapePreviewPoints(
+                                            rawList,
+                                            detectedKind,
+                                          ).first
                                       if (snappedGeom.size >= 2) {
                                         inProgressPoints.clear()
                                         inProgressPoints.addAll(snappedGeom)
@@ -2362,13 +2310,6 @@ fun EditorScreen(
                 }
 
                 if (isCurrentActivePage) {
-                  InteractiveRulerOverlay(
-                    rulerState = rulerState,
-                    onMoveRuler = onMoveRuler,
-                    onRotateRuler = onRotateRuler,
-                    onCloseRuler = onToggleRuler,
-                  )
-
                   // Contextual Lasso Action Pill (Anchored near active selection)
                   androidx.compose.animation.AnimatedVisibility(
                     visible = primaryTool == PrimaryTool.LASSO && showLassoSelection,
@@ -2401,7 +2342,6 @@ fun EditorScreen(
                         onResizeToggleClick = onScaleSelection,
                         onDuplicateClick = onDuplicateSelection,
                         onDeleteClick = onDeleteLassoSelection,
-                        onConvertAiTextClick = { onTogglePopover(ActivePopover.AI_HANDWRITING_ASSIST) },
                         onOpenLassoFiltersClick = { onTogglePopover(ActivePopover.LASSO_SETTINGS) },
                         onDismissLassoClick = onToggleLassoSelection,
                       )
@@ -2831,16 +2771,6 @@ fun EditorScreen(
                   )
                 }
 
-                ActivePopover.AI_HANDWRITING_ASSIST -> {
-                  AiHandwritingAssistPopover(
-                    strokeCount = currentPage.strokes.size,
-                    onInsertConvertedTextBox = { text: String ->
-                      onAddTextBoxAt(Offset(100f, 120f), text)
-                    },
-                    onDismiss = onDismissPopover,
-                  )
-                }
-
                 ActivePopover.EXPORT_SHARE -> {
                   ExportAndSharePopover(
                     document = activeDocument,
@@ -2848,22 +2778,6 @@ fun EditorScreen(
                     documentSha256Hash = documentSha256Hash,
                     onExportFullPdf = onExportFullPdf,
                     onExportCurrentPagePng = onExportCurrentPagePng,
-                    onToggleWatermark = onToggleWatermark,
-                    onCyclePaperColorTheme = onCyclePaperColorTheme,
-                    onOpenSecurityVault = { onTogglePopover(ActivePopover.SECURITY_VAULT) },
-                    onDismiss = onDismissPopover,
-                  )
-                }
-
-                ActivePopover.SECURITY_VAULT -> {
-                  SecurityVaultPopover(
-                    document = activeDocument,
-                    privacyScreenShieldEnabled = privacyScreenShieldEnabled,
-                    watermarkConfidentialExports = watermarkConfidentialExports,
-                    documentSha256Hash = documentSha256Hash,
-                    onSetVaultPin = onSetVaultPin,
-                    onRemoveVaultLock = onRemoveVaultLock,
-                    onTogglePrivacyScreenShield = onTogglePrivacyScreenShield,
                     onToggleWatermark = onToggleWatermark,
                     onDismiss = onDismissPopover,
                   )
@@ -2989,7 +2903,6 @@ private fun DockedMainToolbar(
   primaryTool: PrimaryTool,
   enabledToolbarTools: Set<PrimaryTool>,
   isBookmarked: Boolean,
-  isVaultLocked: Boolean,
   isWhiteboard: Boolean,
   onlyDrawWithStylus: Boolean,
   pageScrollDirection: PageScrollDirection,
@@ -3000,18 +2913,14 @@ private fun DockedMainToolbar(
   onSelectPrimaryTool: (PrimaryTool) -> Unit,
   onTogglePageSidebar: () -> Unit,
   onToggleBookmark: () -> Unit,
-  onToggleRuler: () -> Unit,
   onToggleZoomWindow: () -> Unit,
-  onToggleAudioBar: () -> Unit,
   onOpenTimeKeeper: () -> Unit,
   onOpenToolbarCustomize: () -> Unit,
   onOpenExportShare: () -> Unit,
-  onOpenSecurityVault: () -> Unit,
   onOpenAddPagePopover: () -> Unit,
   onTogglePageScrollDirection: () -> Unit,
   onImportPdfFromDevice: () -> Unit,
   onCyclePaperTemplate: () -> Unit,
-  onCyclePaperColorTheme: () -> Unit,
   onClearPageStrokes: () -> Unit,
   onToggleOnlyDrawWithStylus: () -> Unit,
   onOpenSettings: () -> Unit,
@@ -3164,43 +3073,10 @@ private fun DockedMainToolbar(
             }
           }
 
-        Box(
-          modifier =
-            Modifier
-              .padding(horizontal = 4.dp)
-              .width(1.dp)
-              .height(22.dp)
-              .background(ToolbarIconLight.copy(alpha = 0.25f)),
-        )
-
-        Row(
-          modifier =
-            Modifier
-              .height(36.dp)
-              .clip(RoundedCornerShape(8.dp))
-              .clickable(onClick = onToggleAudioBar)
-              .padding(horizontal = 6.dp)
-              .testTag("toolbar_audio_record_button"),
-          verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-          Icon(
-            imageVector = Icons.Outlined.MicNone,
-            contentDescription = "Record Audio",
-            tint = ToolbarIconLight,
-            modifier = Modifier.size(20.dp),
-          )
-          Icon(
-            imageVector = Icons.Outlined.GraphicEq,
-            contentDescription = null,
-            tint = ToolbarIconLight,
-            modifier = Modifier.size(15.dp),
-          )
-        }
       }
     }
 
-    // Right Cluster: Add Page & Template Studio, Export/Share, Vault Lock, and More Menu
+    // Right Cluster: Add Page & Template Studio, Export/Share, and More Menu
     Row(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -3229,22 +3105,6 @@ private fun DockedMainToolbar(
         contentAlignment = Alignment.Center,
       ) {
         ExportShareBoxIcon(tint = ToolbarIconLight, modifier = Modifier.size(21.dp))
-      }
-
-      Box(
-        modifier =
-          Modifier
-            .size(36.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onOpenSecurityVault)
-            .testTag("toolbar_security_vault_button"),
-        contentAlignment = Alignment.Center,
-      ) {
-        SecurityVaultShieldIcon(
-          tint = if (isVaultLocked) Color(0xFF34C759) else ToolbarIconLight,
-          isLocked = isVaultLocked,
-          modifier = Modifier.size(20.dp),
-        )
       }
 
       var showMoreMenu by remember { mutableStateOf(false) }
@@ -3293,19 +3153,6 @@ private fun DockedMainToolbar(
             onClick = {
               showMoreMenu = false
               onOpenExportShare()
-            },
-          )
-          DropdownMenuItem(
-            text = {
-              Text(
-                "Vault Lock & Privacy Shield...",
-                color = Color(0xFF34C759),
-                fontSize = 13.sp,
-              )
-            },
-            onClick = {
-              showMoreMenu = false
-              onOpenSecurityVault()
             },
           )
           if (!isWhiteboard) {
@@ -3362,23 +3209,6 @@ private fun DockedMainToolbar(
             onClick = {
               showMoreMenu = false
               onToggleOnlyDrawWithStylus()
-            },
-          )
-          DropdownMenuItem(
-            text = { Text("Cycle Paper Color Tint", color = TextPrimaryWhite, fontSize = 13.sp) },
-            onClick = {
-              showMoreMenu = false
-              onCyclePaperColorTheme()
-            },
-          )
-          DropdownMenuItem(
-            text = { Text("Ruler Tool", color = TextPrimaryWhite, fontSize = 13.sp) },
-            leadingIcon = {
-              Icon(Icons.Outlined.Straighten, contentDescription = null, tint = ToolbarIconLight)
-            },
-            onClick = {
-              showMoreMenu = false
-              onToggleRuler()
             },
           )
           DropdownMenuItem(

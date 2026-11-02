@@ -49,6 +49,7 @@ import com.example.model.StudyTapeItem
 import com.example.model.ToolbarDockPosition
 import com.example.model.WritingSubTool
 import com.example.model.ShapeRecognizer
+import com.example.model.ShapeSnapper
 import com.example.model.closedLoopPolygon
 import com.example.model.isClosedCircleLoop
 import com.example.ui.theme.SwatchRoyalBlue
@@ -2851,17 +2852,21 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       val baseWidth =
         state.thicknessPresets.getOrElse(state.selectedThicknessIndex) { 6.5f }
 
+      val snappedFit = if (isShapeStroke) ShapeSnapper.snap(finalPoints) else null
+      val recognition = if (isShapeStroke) ShapeRecognizer.analyze(finalPoints) else null
       val detectedShapeKind =
         if (isShapeStroke) {
           if (!snappedFromHold && !state.shapeAutoDetectMode) {
             state.selectedShapeKind
           } else {
-            autoDetectShapeKind(finalPoints)
+            recognition?.kind ?: autoDetectShapeKind(finalPoints)
           }
         } else null
 
       val (geomPoints, controlPts) =
-        if (detectedShapeKind != null) {
+        if (snappedFit != null && detectedShapeKind != null) {
+          snappedFit to (recognition?.vertices ?: emptyList())
+        } else if (detectedShapeKind != null) {
           buildGeometricShapeWithHandles(finalPoints, detectedShapeKind)
         } else {
           finalPoints to emptyList()

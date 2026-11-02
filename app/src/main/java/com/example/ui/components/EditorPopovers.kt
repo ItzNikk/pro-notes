@@ -1564,7 +1564,7 @@ fun LassoFloatingMenuPill(
   onResizeToggleClick: () -> Unit,
   onDuplicateClick: () -> Unit,
   onDeleteClick: () -> Unit,
-  onConvertAiTextClick: () -> Unit,
+  onConvertAiTextClick: (() -> Unit)? = null,
   onOpenLassoFiltersClick: () -> Unit,
   onDismissLassoClick: () -> Unit,
   modifier: Modifier = Modifier,
@@ -1822,23 +1822,24 @@ fun LassoFloatingMenuPill(
         )
       }
 
-      // 9. AI Handwriting Assist
-      Box(
-        modifier =
-          Modifier
-            .height(32.dp)
-            .clip(RoundedCornerShape(8.dp))
-            .clickable(onClick = onConvertAiTextClick)
-            .padding(horizontal = 6.dp),
-        contentAlignment = Alignment.Center,
-      ) {
-        Text(
-          text = "AI",
-          color = TextPrimaryWhite,
-          fontSize = 13.5.sp,
-          fontFamily = FontFamily.Serif,
-          fontWeight = FontWeight.Bold,
-        )
+      if (onConvertAiTextClick != null) {
+        Box(
+          modifier =
+            Modifier
+              .height(32.dp)
+              .clip(RoundedCornerShape(8.dp))
+              .clickable(onClick = onConvertAiTextClick)
+              .padding(horizontal = 6.dp),
+          contentAlignment = Alignment.Center,
+        ) {
+          Text(
+            text = "AI",
+            color = TextPrimaryWhite,
+            fontSize = 13.5.sp,
+            fontFamily = FontFamily.Serif,
+            fontWeight = FontWeight.Bold,
+          )
+        }
       }
 
       // 10. Delete

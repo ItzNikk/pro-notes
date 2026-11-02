@@ -1,123 +1,303 @@
 package com.example.model
 
 import androidx.compose.ui.geometry.Offset
+import kotlin.math.abs
 import kotlin.math.acos
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * Recognises hand-drawn shapes. Works on the stroke resampled to even spacing (so drawing speed
- * doesn't matter) and counts real corners from the turning angle along the outline. Circles turn
- * evenly everywhere; polygons turn sharply at a few places, which is what tells them apart.
+ * Recognises hand-drawn shapes by *fitting* instead of counting corners.
+ *
+ *  1. Clean the stroke (drop duplicate points, trim pen overshoot at the closing point).
+ *  2. Simplify the outline with Ramer-Douglas-Peucker into a handful of vertices.
+ *  3. Ask "is this a straight-edged polygon?" by measuring how far the real ink wanders from the
+ *     simplified edges (wobble). Hand-drawn polygons hug their edges; circles bow away from them.
+ *  4. Whiten the points with PCA, so rotated ovals and circles are told apart by axis ratio.
+ *  5. Stars are caught first: many vertices, several reflex (inward) ones, uneven radius.
+ *
+ * All thresholds are relative to the stroke's bounding diagonal, so size doesn't matter.
  */
 object ShapeRecognizer {
   private const val SAMPLES = 96
-  private const val WINDOW = 5
-  private const val CORNER_MIN_TURN_DEG = 48.0
 
-  fun recognize(raw: List<Offset>): ShapeKind {
-    if (raw.size < 3) return ShapeKind.LINE
-    val minX = raw.minOf { it.x }
-    val maxX = raw.maxOf { it.x }
-    val minY = raw.minOf { it.y }
-    val maxY = raw.maxOf { it.y }
-    val diag = hypot(maxX - minX, maxY - minY).coerceAtLeast(1f)
-    val pathLen = length(raw)
-    val chord = (raw.last() - raw.first()).getDistance()
+  // Simplification tolerance as a fraction of the bounding diagonal
+  private const val POLY_EPS = 0.045f
+  private const val STAR_EPS = 0.03f
 
-    val loop = closedLoopPolygon(raw)
-    val closed = loop != null || (chord <= diag * 0.2f && pathLen >= diag * 1.5f)
-    return if (closed) {
-      classifyClosed(resample(loop ?: raw, SAMPLES), minX, maxX, minY, maxY)
-    } else {
-      classifyOpen(raw, diag, pathLen, chord)
+  // Closed-stroke detection
+  private const val CLOSE_GAP = 0.2f
+  private const val MIN_LOOP_LEN = 1.5f
+
+  // A vertex that turns less than this is just noise on a straight edge
+  private const val MIN_VERTEX_TURN_DEG = 28.0
+
+  // Max average (distance to edge / edge length) for an outline to count as straight-edged
+  private const val MAX_WOBBLE = 0.05f
+
+  private const val CIRCLE_MAX_ASPECT = 1.2f
+  private const val STAR_MIN_RADIUS_VARIATION = 0.14f
+
+  /** [vertices] holds the user's own corner points (line ends, arrow tail/tip, polygon corners). */
+  class Recognition(val kind: ShapeKind, val vertices: List<Offset> = emptyList())
+
+  fun recognize(raw: List<Offset>): ShapeKind = analyze(raw).kind
+
+  fun analyze(raw: List<Offset>): Recognition {
+    val pts = dedupe(raw)
+    if (pts.size < 3) return Recognition(ShapeKind.LINE, listOfNotNull(pts.firstOrNull(), pts.lastOrNull()))
+
+    val diag = hypot(pts.maxOf { it.x } - pts.minOf { it.x }, pts.maxOf { it.y } - pts.minOf { it.y })
+      .coerceAtLeast(1f)
+    val pathLen = length(pts)
+
+    val loop = trimToLoop(pts, diag, pathLen)
+    if (loop == null) {
+      val kind = classifyOpen(pts, diag, pathLen)
+      val vertices = when (kind) {
+        ShapeKind.LINE -> listOf(pts.first(), pts.last())
+        ShapeKind.ARROW -> rdp(pts, diag * 0.04f)
+        else -> emptyList()
+      }
+      return Recognition(kind, vertices)
     }
+
+    val ring = resample(loop, SAMPLES)
+    val kind = classifyClosed(ring, diag)
+    val vertices = when (kind) {
+      ShapeKind.TRIANGLE, ShapeKind.PENTAGON, ShapeKind.HEXAGON ->
+        cleanVertices(simplifyClosed(ring, diag * POLY_EPS))
+      ShapeKind.STAR -> cleanVertices(simplifyClosed(ring, diag * STAR_EPS))
+      else -> emptyList()
+    }
+    return Recognition(kind, vertices)
   }
 
-  private fun classifyOpen(raw: List<Offset>, diag: Float, pathLen: Float, chord: Float): ShapeKind {
+  // ---------------------------------------------------------------- open strokes
+
+  private fun classifyOpen(pts: List<Offset>, diag: Float, pathLen: Float): ShapeKind {
+    val first = pts.first()
+    val last = pts.last()
+    val chord = (last - first).getDistance()
     if (chord < 1f) return ShapeKind.CURVE
-    val maxDeviation = raw.maxOf { distanceToLine(it, raw.first(), raw.last()) }
+
+    val maxDeviation = pts.maxOf { distToSegment(it, first, last) }
     if (maxDeviation <= chord * 0.05f) return ShapeKind.LINE
 
-    if (chord > diag * 0.38f && pathLen < diag * 2.2f) {
-      val pts = resample(raw, SAMPLES)
-      val idx = (pts.size * 0.78f).toInt().coerceIn(1, pts.lastIndex)
-      val shaftDirect = (pts[idx] - pts.first()).getDistance().coerceAtLeast(1f)
-      val shaftPath = length(pts.subList(0, idx + 1))
-      val tail = length(pts) - shaftPath
-      if (shaftPath <= shaftDirect * 1.15f && tail in 12f..(diag * 0.48f)) return ShapeKind.ARROW
+    // Arrow = one long straight shaft, then a sharp reversal into a short barb.
+    val s = rdp(pts, diag * 0.04f)
+    if (s.size in 3..4) {
+      val shaft = (s[1] - s[0]).getDistance()
+      val barb = (s.last() - s[s.size - 2]).getDistance()
+      val turn = turnDeg(s[1] - s[0], s[2] - s[1])
+      if (shaft >= pathLen * 0.6f && turn >= 100.0 && barb in (shaft * 0.08f)..(shaft * 0.45f)) {
+        return ShapeKind.ARROW
+      }
     }
     return ShapeKind.CURVE
   }
 
-  private fun classifyClosed(
-    ring: List<Offset>,
-    minX: Float,
-    maxX: Float,
-    minY: Float,
-    maxY: Float,
-  ): ShapeKind {
+  // ---------------------------------------------------------------- closed strokes
+
+  private fun classifyClosed(ring: List<Offset>, diag: Float): ShapeKind {
+    if (ring.size < 12) return ShapeKind.OVAL
+
+    val fit = whiten(ring)
+
+    // Stars: lots of vertices, several pointing inward, radius far from constant
+    val fine = cleanVertices(simplifyClosed(ring, diag * STAR_EPS))
+    if (fine.size in 8..12 && reflexCount(fine) >= 3 && fit.radiusVariation >= STAR_MIN_RADIUS_VARIATION) {
+      return ShapeKind.STAR
+    }
+
+    val poly = cleanVertices(simplifyClosed(ring, diag * POLY_EPS))
+    val k = poly.size
+    val round = if (fit.aspect <= CIRCLE_MAX_ASPECT) ShapeKind.CIRCLE else ShapeKind.OVAL
+
+    if (k !in 3..6 || wobble(ring, poly) > MAX_WOBBLE) return round
+
+    return when (k) {
+      3 -> ShapeKind.TRIANGLE
+      4 -> if (axisSkewDeg(poly) > 25.0) ShapeKind.DIAMOND else ShapeKind.RECTANGLE
+      5 -> ShapeKind.PENTAGON
+      else -> ShapeKind.HEXAGON
+    }
+  }
+
+  private class Fit(val aspect: Float, val radiusVariation: Float)
+
+  /** PCA-whitens the ring: gives axis ratio and how uneven the radius is around the shape. */
+  private fun whiten(ring: List<Offset>): Fit {
     val n = ring.size
-    val w = maxX - minX
-    val h = maxY - minY
-    val aspect = w / h.coerceAtLeast(1f)
-    val ellipse = if (aspect in 0.8f..1.25f) ShapeKind.CIRCLE else ShapeKind.OVAL
-    if (n < 12) return ellipse
-
-    // Turning angle at every outline sample
-    val turn = DoubleArray(n) { i ->
-      val a = ring[(i - WINDOW + n) % n]
-      val b = ring[i]
-      val c = ring[(i + WINDOW) % n]
-      val v1 = b - a
-      val v2 = c - b
-      val mag = (v1.getDistance() * v2.getDistance()).coerceAtLeast(0.0001f)
-      val cos = ((v1.x * v2.x + v1.y * v2.y) / mag).coerceIn(-1f, 1f)
-      Math.toDegrees(acos(cos.toDouble()))
+    val mx = ring.sumOf { it.x.toDouble() } / n
+    val my = ring.sumOf { it.y.toDouble() } / n
+    var sxx = 0.0
+    var syy = 0.0
+    var sxy = 0.0
+    for (p in ring) {
+      val dx = p.x - mx
+      val dy = p.y - my
+      sxx += dx * dx
+      syy += dy * dy
+      sxy += dx * dy
     }
-
-    // Strongest turns first, keeping them at least n/12 samples apart
-    val minSeparation = n / 12
-    val corners = mutableListOf<Int>()
-    for (i in turn.indices.sortedByDescending { turn[it] }) {
-      if (turn[i] < CORNER_MIN_TURN_DEG) break
-      val farFromOthers =
-        corners.all { c ->
-          val d = kotlin.math.abs(c - i)
-          minOf(d, n - d) >= minSeparation
-        }
-      if (farFromOthers) corners.add(i)
+    val theta = 0.5 * atan2(2 * sxy, sxx - syy)
+    val c = cos(theta)
+    val s = sin(theta)
+    val us = ArrayList<Double>(n)
+    val vs = ArrayList<Double>(n)
+    for (p in ring) {
+      val dx = p.x - mx
+      val dy = p.y - my
+      us.add(dx * c + dy * s)
+      vs.add(-dx * s + dy * c)
     }
-    val k = corners.size
+    val su = sqrt(us.sumOf { it * it } / n).coerceAtLeast(1e-3)
+    val sv = sqrt(vs.sumOf { it * it } / n).coerceAtLeast(1e-3)
+    val radii = List(n) { hypot(us[it] / su, vs[it] / sv) }
+    val mean = radii.average().coerceAtLeast(1e-3)
+    val std = sqrt(radii.sumOf { (it - mean) * (it - mean) } / n) / mean
+    return Fit(aspect = (maxOf(su, sv) / minOf(su, sv)).toFloat(), radiusVariation = std.toFloat())
+  }
 
-    // How far the outline strays from a perfect ellipse (high for stars, low for round shapes)
-    val cx = (minX + maxX) / 2f
-    val cy = (minY + maxY) / 2f
-    val rx = (w / 2f).coerceAtLeast(12f)
-    val ry = (h / 2f).coerceAtLeast(12f)
-    val radii = ring.map { hypot((it.x - cx) / rx, (it.y - cy) / ry) }
-    val mean = radii.average().toFloat().coerceAtLeast(0.01f)
-    val stdR = sqrt(radii.map { (it - mean) * (it - mean) }.average().toFloat()) / mean
-
-    return when {
-      k <= 2 -> ellipse
-      k == 3 -> if (stdR < 0.05f) ellipse else ShapeKind.TRIANGLE
-      k == 4 -> {
-        if (stdR < 0.05f) {
-          ellipse
-        } else {
-          val mids = listOf(Offset(cx, minY), Offset(maxX, cy), Offset(cx, maxY), Offset(minX, cy))
-          val box = listOf(Offset(minX, minY), Offset(maxX, minY), Offset(maxX, maxY), Offset(minX, maxY))
-          val toMids = corners.sumOf { i -> mids.minOf { (ring[i] - it).getDistance() }.toDouble() }
-          val toBox = corners.sumOf { i -> box.minOf { (ring[i] - it).getDistance() }.toDouble() }
-          if (toMids < toBox * 0.85) ShapeKind.DIAMOND else ShapeKind.RECTANGLE
+  /**
+   * Average of (distance from ink to its nearest polygon edge) / (that edge's length).
+   * Straight-sided shapes score near 0; a circle approximated by chords scores noticeably higher.
+   */
+  private fun wobble(ring: List<Offset>, poly: List<Offset>): Float {
+    var sum = 0f
+    for (p in ring) {
+      var best = Float.MAX_VALUE
+      var bestLen = 1f
+      for (i in poly.indices) {
+        val a = poly[i]
+        val b = poly[(i + 1) % poly.size]
+        val d = distToSegment(p, a, b)
+        if (d < best) {
+          best = d
+          bestLen = (b - a).getDistance().coerceAtLeast(1f)
         }
       }
-      k == 5 -> ShapeKind.PENTAGON
-      k == 6 -> ShapeKind.HEXAGON
-      k >= 8 && stdR >= 0.17f -> ShapeKind.STAR
-      else -> ellipse
+      sum += best / bestLen
     }
+    return sum / ring.size
+  }
+
+  /** Mean angle of the edges away from the nearest axis: ~0 for upright boxes, ~45 for diamonds. */
+  private fun axisSkewDeg(poly: List<Offset>): Double {
+    var total = 0.0
+    for (i in poly.indices) {
+      val e = poly[(i + 1) % poly.size] - poly[i]
+      val a = Math.toDegrees(atan2(abs(e.y).toDouble(), abs(e.x).toDouble())) // 0..90
+      total += minOf(a, 90.0 - a)
+    }
+    return total / poly.size
+  }
+
+  private fun reflexCount(poly: List<Offset>): Int {
+    val n = poly.size
+    var area2 = 0.0
+    for (i in 0 until n) {
+      val a = poly[i]
+      val b = poly[(i + 1) % n]
+      area2 += a.x.toDouble() * b.y - b.x.toDouble() * a.y
+    }
+    var count = 0
+    for (i in 0 until n) {
+      val a = poly[(i - 1 + n) % n]
+      val b = poly[i]
+      val c = poly[(i + 1) % n]
+      val cross = (b.x - a.x).toDouble() * (c.y - b.y) - (b.y - a.y).toDouble() * (c.x - b.x)
+      if (cross * area2 < 0) count++
+    }
+    return count
+  }
+
+  // ---------------------------------------------------------------- simplification
+
+  /** Closed-ring RDP: split at the point farthest from the start, simplify both halves. */
+  private fun simplifyClosed(ring: List<Offset>, eps: Float): List<Offset> {
+    val far = ring.indices.maxByOrNull { (ring[it] - ring[0]).getDistance() } ?: return ring
+    if (far == 0) return ring
+    val a = rdp(ring.subList(0, far + 1), eps)
+    val b = rdp(ring.subList(far, ring.size) + ring[0], eps)
+    return a.dropLast(1) + b.dropLast(1)
+  }
+
+  /** Repeatedly removes the vertex with the gentlest turn until every vertex is a real corner. */
+  private fun cleanVertices(input: List<Offset>): List<Offset> {
+    val v = input.toMutableList()
+    while (v.size > 3) {
+      var worst = -1
+      var worstTurn = MIN_VERTEX_TURN_DEG
+      for (i in v.indices) {
+        val prev = v[(i - 1 + v.size) % v.size]
+        val next = v[(i + 1) % v.size]
+        val t = turnDeg(v[i] - prev, next - v[i])
+        if (t < worstTurn) {
+          worstTurn = t
+          worst = i
+        }
+      }
+      if (worst < 0) break
+      v.removeAt(worst)
+    }
+    return v
+  }
+
+  private fun rdp(pts: List<Offset>, eps: Float): List<Offset> {
+    if (pts.size < 3) return pts
+    var maxD = 0f
+    var idx = 0
+    for (i in 1 until pts.lastIndex) {
+      val d = distToSegment(pts[i], pts.first(), pts.last())
+      if (d > maxD) {
+        maxD = d
+        idx = i
+      }
+    }
+    if (maxD <= eps) return listOf(pts.first(), pts.last())
+    val left = rdp(pts.subList(0, idx + 1), eps)
+    val right = rdp(pts.subList(idx, pts.size), eps)
+    return left.dropLast(1) + right
+  }
+
+  // ---------------------------------------------------------------- stroke cleanup
+
+  private fun dedupe(raw: List<Offset>): List<Offset> {
+    val out = ArrayList<Offset>(raw.size)
+    for (p in raw) if (out.isEmpty() || (p - out.last()).getDistance() >= 0.5f) out.add(p)
+    return out
+  }
+
+  /**
+   * If the stroke comes back near its start, returns it cut at the closest return point (so a pen
+   * overshoot past the start doesn't distort the outline). Otherwise null.
+   */
+  private fun trimToLoop(pts: List<Offset>, diag: Float, pathLen: Float): List<Offset>? {
+    if (pathLen < diag * MIN_LOOP_LEN) return null
+    val tol = diag * CLOSE_GAP
+    var best = -1
+    var bestDist = Float.MAX_VALUE
+    for (i in pts.size / 2 until pts.size) {
+      val d = (pts[i] - pts.first()).getDistance()
+      if (d < bestDist) {
+        bestDist = d
+        best = i
+      }
+    }
+    return if (best >= 0 && bestDist <= tol) pts.subList(0, best + 1) else null
+  }
+
+  // ---------------------------------------------------------------- geometry helpers
+
+  private fun turnDeg(v1: Offset, v2: Offset): Double {
+    val mag = (v1.getDistance() * v2.getDistance()).coerceAtLeast(0.0001f)
+    val c = ((v1.x * v2.x + v1.y * v2.y) / mag).coerceIn(-1f, 1f)
+    return Math.toDegrees(acos(c.toDouble()))
   }
 
   private fun length(pts: List<Offset>): Float {
@@ -126,11 +306,13 @@ object ShapeRecognizer {
     return total
   }
 
-  private fun distanceToLine(p: Offset, a: Offset, b: Offset): Float {
+  private fun distToSegment(p: Offset, a: Offset, b: Offset): Float {
     val dx = b.x - a.x
     val dy = b.y - a.y
-    val len = hypot(dx, dy).coerceAtLeast(0.0001f)
-    return kotlin.math.abs((p.x - a.x) * dy - (p.y - a.y) * dx) / len
+    val len2 = dx * dx + dy * dy
+    if (len2 < 1e-6f) return (p - a).getDistance()
+    val t = (((p.x - a.x) * dx + (p.y - a.y) * dy) / len2).coerceIn(0f, 1f)
+    return hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t))
   }
 
   /** Resamples a polyline to [count] evenly spaced points. */
