@@ -1,41 +1,24 @@
 # Changelog
 
-## v2.5.0 — Studio Release Edition
+All notable architectural and functional changes to **Pro Notes** are documented in this file.
 
-### Triple-Tap (3x Tap) Cinema Video Showcase (`onboarding_video.mp4`)
-- Added a **3-times rapid tap gesture** across the **Editor Canvas**, **Top Document Tab Bar**, **Documents Header**, and **Settings Footer** to launch the full-screen `onboarding_video.mp4` Video Showcase (`ThankYouScreen`).
-- Added **Pure Cinema Video Mode** inside `ThankYouScreen`: triple-tapping anywhere on the video screen toggles the rainbow card overlay on/off so the video can be watched edge-to-edge without any UI obstruction.
+## [2.5.0] — Production Release
 
-### Redesigned Interactive Studio Tour (6 Steps + Live Auto-Demo + Video PiP)
-- Upgraded the in-editor **Interactive Feature Tour** with a minimizable studio HUD, clickable **Step 1–6 progress pills**, an embedded **Picture-in-Picture (`R.raw.onboarding_video`) video guide toggle**, and an **"✨ Auto-Demo Step"** action (`runTourStepAutoDemo()`) that draws live ink, snapped shapes, and study tape demonstrations directly on the canvas.
+### Vector Ink & Rendering Pipeline
+- **Smoothed Variable-Width Calligraphy & Pressure Engine**: Implemented continuous segment interpolation with rounded joins for directional (`CALLIGRAPHY`) and pressure-modulated (`FOUNTAIN`, `BRUSH`) strokes, eliminating vertex separation on high-velocity curves.
+- **Asynchronous Off-Thread Persistence**: Debounced Room SQLite serialization onto `Dispatchers.Default`, preventing main-thread contention during rapid stylus-lift and consecutive stroke initiation.
+- **Proximity-Gated Precision Ruler**: Restricted ruler edge snapping (`snapPointAlongRuler`) to strokes originating within the active ruler's local bounding corridor while preserving independent pen/highlighter sub-tool states.
 
-### Snap-to-Shape Engine & Circle Recognition Fix
-- **Pre-Trimmed Closure Detection**: Updated `ShapeClassifier.classify` to trim stylus closure tail overshoot (`StrokeResampler.trimClosureOvershoot`) *before* evaluating closure ratio and aspect bounds, ensuring hand-drawn circles and ovals reliably snap to crisp geometric circles.
-- **Hold-Snap Circle Stability**: Fixed the hold-to-snap drag handler in `EditorScreen.kt` so closed shapes (Circles, Ovals, Polygons) anchor around their snapped center (`snappedHoldCenter`) and require deliberate movement (`> 16px`) before resizing, eliminating the bug where holding a snapped circle collapsed it toward the start point.
-- **Empty Circle-to-Lasso Guard**: Updated `triggerInstantCircleToLasso` so drawing an empty circle on the canvas snaps to a geometric circle instead of triggering an empty Lasso selection.
-- **Expanded Shape Vocabulary (14 Shapes)**: Added recognition and direct drawing for **Angle Brackets / Chevrons (`>`, `<`, `L`)**, **Right Triangles**, and **Parallelograms** alongside Circles, Ovals, Triangles, Rectangles, Diamonds, Pentagons, Hexagons, Stars, Lines, Arrows, and Curves.
+### Geometric Primitive Recognition
+- **Closure-Normalized Shape Classification**: Pre-trimmed stylus closure overshoot (`StrokeResampler.trimClosureOvershoot`) prior to circularity and aspect evaluation, improving classification accuracy for hand-drawn circles and ellipses.
+- **Centroid-Anchored Hold Stabilization**: Anchored closed geometric primitives around their fitted centroid (`snappedHoldCenter`) during stationary hold gestures to prevent unintended radial collapse.
+- **14-Primitive Recognition Engine**: Full support for lines, arrows, quadratic curves, circles, ellipses, triangles, right triangles, rectangles, diamonds, parallelograms, pentagons, hexagons, stars, and orthogonal/chevron vertices.
 
-### 7 Studio Pens, Rotatable Ruler & Clean Bottom Canvas
-- Expanded `PenStyle` with 4 new studio pens: **Fineliner**, **Calligraphy (45° Italic Nib)**, **Marker (Chisel Felt-Tip)**, and **Neon Glow (3-Layer Luminous Halo)**.
-- Added **Ruler** directly to `WritingSubTool` in the sub-toolbar so the rotatable `InteractiveRulerOverlay` can be toggled and used to snap straight lines along any angle.
-- Removed the bottom `"Pull or Tap + Page"` / `"Templates & Cover"` overlay bar from `EditorScreen.kt` for an unobstructed edge-to-edge writing surface.
+### Spatial Selection & Multi-Layer Manipulation
+- **Persistent Spatial Lasso State**: Preserved active bounding-box selection state across tool inspections and post-translation releases, with configurable automatic pen restoration (`autoReturnToPenAfterMove`).
+- **Unified Layer Filtering & Z-Order Control**: Added granular inclusion filters across six canvas layers (Vector Ink, Geometric Shapes, Typography, Media Assets, Annotations, and Occlusion Masks) alongside explicit Z-index promotion/demotion.
 
-### Folder Drag-and-Drop Fix & Stylus-Synced Folder Color Studio
-- Fixed the stale `pointerInput` closure bug in `DocumentsScreen.kt` using `rememberUpdatedState` so releasing a dragged notebook or folder over a target folder reliably moves the item.
-- Added an instant **`⋮⋮ Drag`** handle badge on notebook cards and a **Quick-Drop Folder Target Strip** at the top of the Documents view.
-- Upgraded Folder creation and Folder color customization with the **Stylus Color System**, syncing your active Stylus Quick Swatches, Custom Stylus Palette, Studio Grid, and a 3-slider **HSV Studio (Hue, Saturation, Brightness)**.
-
----
-
-## v2.0.0 — Play Store Release Edition
-
-### Laser Pointer Polish & Custom Colors
-- Removed the end-cap circle/pointer dot from the laser stroke so only the clean glowing laser beam is drawn.
-- Wired the toolbar's active selected color into both live and fading laser strokes (`LaserTrailStroke.color`).
-
-### Complete Shapes Studio Rewrite
-- Rebuilt the Shapes tool with a docked **Shape Studio Strip** and enhanced popover supporting both **Auto-Snap** (freehand sketch + 320ms hold) and **Direct Drag-to-Draw**.
-
-### Stylus Lag Elimination & Multi-Brand Pen Hardware Settings
-- Eliminated `pointerInput` coroutine restarts on color/thickness/tool changes using `rememberUpdatedState` references and reduced stylus point coalescing distance to `0.85f` for ultra-low-latency ink.
-- Added a dedicated **Stylus & Pens** category in Settings supporting **Samsung S Pen**, **Xiaomi Smart Pen (Gen 1 & 2)**, **OnePlus Stylo / OPPO Pencil**, **Lenovo Precision / Tab Pen Plus**, **Huawei M-Pencil**, **USI 2.0 Stylus**, and **Universal Active Pen**.
+### Document Architecture, Full-Text Indexing & Workspace Hierarchy
+- **PDF & Multi-Layer Full-Text Indexing**: Integrated automated text extraction during PDF ingestion (`PdfImportHelper.extractTextFromPdfFile`) and added an in-document search bar indexing PDF text layers, typography boxes, annotations, and canvas metadata with instant page navigation.
+- **Custom Cover Ingestion & First-Page Canvas Integration**: Enabled high-resolution custom cover image import and direct vector ink rendering on Page 1 cover canvases, with live stroke composite previews in the document library.
+- **Hierarchical Folder-First Library**: Prioritized directory structures ahead of document cards and added multi-target drag-and-drop organization with HSV color synchronization.

@@ -28,10 +28,10 @@
   <text x="68" y="47" fill="#F8FAFC" font-family="sans-serif" font-size="14" font-weight="bold">Quantum Mechanics Lecture • Page 1/4</text>
   <rect x="360" y="26" width="190" height="32" rx="8" fill="#1F293D" />
   <text x="378" y="47" fill="#94A3B8" font-family="sans-serif" font-size="12" font-weight="bold">Architecture Sketchbook</text>
-  <rect x="975" y="27" width="185" height="30" rx="8" fill="#1E293B" stroke="#38BDF8" stroke-width="1" />
-  <text x="992" y="46" fill="#38BDF8" font-family="sans-serif" font-size="11" font-weight="bold">3x Tap: Cinema Showcase</text>
+  <rect x="935" y="27" width="225" height="30" rx="8" fill="#1E293B" stroke="#38BDF8" stroke-width="1" />
+  <text x="954" y="46" fill="#38BDF8" font-family="sans-serif" font-size="11" font-weight="bold">PDF &amp; Ink Full-Text Indexing</text>
 
-  <!-- Sub-Toolbar with 7 Studio Pens, Shapes, Lasso, Tape, Ruler & Live Color Swatches -->
+  <!-- Sub-Toolbar with Studio Pens, Shapes, Lasso, Tape, Ruler & Live Color Swatches -->
   <rect x="140" y="76" width="920" height="54" rx="16" fill="url(#toolbarGrad)" stroke="#334155" stroke-width="1.5" />
   <!-- Tool Pills -->
   <rect x="158" y="85" width="76" height="36" rx="10" fill="#2563EB" />
@@ -62,7 +62,7 @@
   <circle cx="862" cy="103" r="11" fill="#F59E0B" />
   <circle cx="894" cy="103" r="11" fill="#A855F7" />
   <rect x="924" y="88" width="118" height="30" rx="15" fill="#0F172A" stroke="#38BDF8" stroke-width="1.2" />
-  <text x="942" y="107" fill="#38BDF8" font-family="sans-serif" font-size="11" font-weight="bold">S Pen • 0.85px</text>
+  <text x="942" y="107" fill="#38BDF8" font-family="sans-serif" font-size="11" font-weight="bold">S Pen • 4096 lvl</text>
 
   <!-- Notebook Paper Canvas -->
   <rect x="90" y="146" width="1020" height="510" rx="16" fill="#FCFBF7" stroke="#CBD5E1" stroke-width="2" />
@@ -87,39 +87,39 @@
 
   <!-- Snapped Perfect Circle & Polygon Showcase -->
   <circle cx="280" cy="310" r="88" fill="#3B82F6" fill-opacity="0.12" stroke="#2563EB" stroke-width="4" />
-  <text x="218" y="315" fill="#1E40AF" font-family="sans-serif" font-size="14" font-weight="bold">Hold-Snapped Circle</text>
+  <text x="214" y="315" fill="#1E40AF" font-family="sans-serif" font-size="14" font-weight="bold">Geometric Fit Engine</text>
   <rect x="205" y="195" width="150" height="24" rx="12" fill="#1E293B" />
-  <text x="219" y="211" fill="#38BDF8" font-family="sans-serif" font-size="11" font-weight="bold">✓ Auto-Snap Circle</text>
+  <text x="219" y="211" fill="#38BDF8" font-family="sans-serif" font-size="11" font-weight="bold">✓ Vector Primitive</text>
 
   <!-- Right-Angle & Bracket Snap Showcase -->
   <polyline points="450,245 530,295 450,345" fill="none" stroke="#8B5CF6" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" />
   <polyline points="620,245 540,295 620,345" fill="none" stroke="#EC4899" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round" />
-  <text x="462" y="382" fill="#475569" font-family="sans-serif" font-size="12" font-weight="bold">Angle Brackets &gt; &lt;</text>
+  <text x="458" y="382" fill="#475569" font-family="sans-serif" font-size="12" font-weight="bold">Orthogonal &amp; Vertex Fitting</text>
 
-  <!-- Neon Glow Pen & Calligraphy Showcase -->
+  <!-- Variable-Pressure & Calligraphy Ink Showcase -->
   <path d="M 150 490 Q 250 420, 350 490 T 550 485" fill="none" stroke="url(#neonGlow)" stroke-width="7" stroke-linecap="round" filter="url(#glow)" />
-  <text x="155" y="532" fill="#0F172A" font-family="sans-serif" font-size="13" font-weight="bold">Neon Glow &amp; 45° Calligraphy Studio Pens</text>
+  <text x="155" y="532" fill="#0F172A" font-family="sans-serif" font-size="13" font-weight="bold">Pressure-Modulated Vector Ink &amp; 45° Chisel Nib</text>
 
-  <!-- Study Tape Flashcard Occlusion Strip -->
-  <rect x="150" y="560" width="380" height="44" rx="10" fill="#F59E0B" stroke="#D97706" stroke-width="2" />
-  <text x="178" y="587" fill="#FFFFFF" font-family="sans-serif" font-size="14" font-weight="bold">TAP STUDY TAPE TO REVEAL FORMULA</text>
+  <!-- Active-Recall Occlusion Layer -->
+  <rect x="150" y="560" width="380" height="44" rx="10" fill="#0F172A" stroke="#334155" stroke-width="2" />
+  <text x="180" y="587" fill="#F8FAFC" font-family="sans-serif" font-size="13" font-weight="bold">ACTIVE-RECALL OCCLUSION MASK • TAP TO REVEAL</text>
 
   <!-- Interactive Rotatable Ruler Overlay -->
   <g transform="translate(650, 445) rotate(-14)">
     <rect x="0" y="0" width="380" height="58" rx="10" fill="#0F172A" fill-opacity="0.88" stroke="#38BDF8" stroke-width="2" />
-    <text x="145" y="36" fill="#38BDF8" font-family="sans-serif" font-size="13" font-weight="bold">RULER • -14.0°</text>
+    <text x="125" y="36" fill="#38BDF8" font-family="sans-serif" font-size="13" font-weight="bold">PRECISION RULER • -14.0°</text>
   </g>
 
-  <!-- Redesigned Interactive Tour HUD Card (Bottom-Right) -->
+  <!-- Multi-Layer Spatial Lasso Studio Card -->
   <rect x="680" y="166" width="405" height="220" rx="18" fill="#0F172A" stroke="#38BDF8" stroke-width="2" />
-  <text x="702" y="196" fill="#38BDF8" font-family="sans-serif" font-size="11" font-weight="bold">INTERACTIVE STUDIO TOUR • STEP 2 OF 6</text>
-  <text x="702" y="222" fill="#FFFFFF" font-family="sans-serif" font-size="16" font-weight="bold">Continuous Auto-Snap Shapes (&gt;, &lt;, O)</text>
-  <text x="702" y="246" fill="#94A3B8" font-family="sans-serif" font-size="12">Draw any circle, polygon, arrow, or angle bracket</text>
-  <text x="702" y="264" fill="#94A3B8" font-family="sans-serif" font-size="12">and hold 320ms to snap seamlessly without interruption.</text>
-  <rect x="702" y="286" width="155" height="34" rx="10" fill="#059669" />
-  <text x="720" y="308" fill="#FFFFFF" font-family="sans-serif" font-size="12" font-weight="bold">✨ Auto-Demo Step</text>
-  <rect x="868" y="286" width="110" height="34" rx="10" fill="#1E293B" stroke="#38BDF8" stroke-width="1" />
-  <text x="886" y="308" fill="#38BDF8" font-family="sans-serif" font-size="12" font-weight="bold">🎬 Video PiP</text>
+  <text x="702" y="196" fill="#38BDF8" font-family="sans-serif" font-size="11" font-weight="bold">SPATIAL LASSO STUDIO • MULTI-LAYER ENGINE</text>
+  <text x="702" y="222" fill="#FFFFFF" font-family="sans-serif" font-size="16" font-weight="bold">Granular Layer Filtering &amp; Transform</text>
+  <text x="702" y="246" fill="#94A3B8" font-family="sans-serif" font-size="12">Independently target vector ink, geometric primitives,</text>
+  <text x="702" y="264" fill="#94A3B8" font-family="sans-serif" font-size="12">typography, media assets, and occlusion layers.</text>
+  <rect x="702" y="286" width="175" height="34" rx="10" fill="#1E293B" stroke="#38BDF8" stroke-width="1" />
+  <text x="720" y="308" fill="#38BDF8" font-family="sans-serif" font-size="12" font-weight="bold">Freehand / Rectangular</text>
+  <rect x="888" y="286" width="174" height="34" rx="10" fill="#1E293B" stroke="#A855F7" stroke-width="1" />
+  <text x="908" y="308" fill="#E9D5FF" font-family="sans-serif" font-size="12" font-weight="bold">Z-Order &amp; Recolor</text>
   <rect x="702" y="334" width="360" height="34" rx="10" fill="#2563EB" />
-  <text x="822" y="356" fill="#FFFFFF" font-family="sans-serif" font-size="13" font-weight="bold">Next Step →</text>
+  <text x="780" y="356" fill="#FFFFFF" font-family="sans-serif" font-size="13" font-weight="bold">Non-Destructive Affine Transform</text>
 </svg>
