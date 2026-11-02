@@ -716,12 +716,12 @@ class LassoShape(private val poly: List<Offset>) {
  * overshoot case only the enclosed part is returned.
  */
 fun closedLoopPolygon(points: List<Offset>): List<Offset>? {
-  if (points.size < 10) return null
+  if (points.size < 8) return null
   val diag = hypot(points.maxOf { it.x } - points.minOf { it.x }, points.maxOf { it.y } - points.minOf { it.y })
-  if (diag < 90f) return null // ignore handwriting-sized loops
+  if (diag < 52f) return null // ignore tiny handwriting-sized loops
   var pathLen = 0f
   for (i in 1 until points.size) pathLen += (points[i] - points[i - 1]).getDistance()
-  if (pathLen < diag * 1.5f) return null // a line or an arc, not something that goes around
+  if (pathLen < diag * 1.35f) return null // a line or an arc, not something that goes around
 
   var polygon: List<Offset>? = null
 
@@ -738,11 +738,11 @@ fun closedLoopPolygon(points: List<Offset>): List<Offset>? {
   // 2) The pen ended near where it started.
   if (polygon == null) {
     val gap = (points.last() - points.first()).getDistance()
-    if (gap <= maxOf(diag * 0.22f, 40f)) polygon = points
+    if (gap <= maxOf(diag * 0.42f, 68f)) polygon = points
   }
 
   val poly = polygon ?: return null
-  if (poly.size < 8) return null
+  if (poly.size < 6) return null
 
   val minX = poly.minOf { it.x }
   val maxX = poly.maxOf { it.x }
@@ -750,7 +750,7 @@ fun closedLoopPolygon(points: List<Offset>): List<Offset>? {
   val maxY = poly.maxOf { it.y }
   val w = maxX - minX
   val h = maxY - minY
-  if (hypot(w, h) < 80f) return null
+  if (hypot(w, h) < 50f) return null
 
   // Reject thin back-and-forth scribbles that happen to cross themselves.
   var twiceArea = 0f
@@ -760,7 +760,7 @@ fun closedLoopPolygon(points: List<Offset>): List<Offset>? {
     twiceArea += a.x * b.y - b.x * a.y
   }
   val area = kotlin.math.abs(twiceArea) / 2f
-  if (area < w * h * 0.2f) return null
+  if (area < w * h * 0.14f) return null
   return poly
 }
 

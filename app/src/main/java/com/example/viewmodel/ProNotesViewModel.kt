@@ -143,6 +143,11 @@ data class ProNotesUiState(
   val lassoSelectedImageIds: Set<String> = emptySet(),
   val isLassoResizeMode: Boolean = false,
   val isLassoColorMenuOpen: Boolean = false,
+  val lassoTriggeredFromCircleGesture: Boolean = false,
+  val previousToolBeforeCircleLasso: PrimaryTool = PrimaryTool.WRITING_TOOLS,
+  val barrelRollAngleDegrees: Float = 0f,
+  val barrelRollPreviewEnabled: Boolean = true,
+  val showThankYouScreen: Boolean = false,
   val lassoClipboard: LassoClipboard? = null,
   val rulerState: RulerState = RulerState(isVisible = false),
   val isZoomWindowVisible: Boolean = false,
@@ -2078,7 +2083,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
       if (filters.includeHandwriting) {
         page.strokes
           .filter { stroke ->
-            shape.fractionInside(densifyPolyline(stroke.points, 6f)) >= 0.5f
+            shape.fractionInside(densifyPolyline(stroke.points, 6f)) >= 0.22f ||
+              stroke.points.any { shape.contains(it) }
           }
           .map { it.id }
           .toSet()
@@ -2166,7 +2172,6 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     val polygon = closedLoopPolygon(loop.points) ?: return false
     val remaining = page.copy(strokes = page.strokes.filterNot { it.id == loop.id })
     val selection = computeLassoSelection(polygon, remaining, state.lassoFilters)
-    if (selection.totalCount == 0) return false
 
     var savedDoc: NotebookDocument? = null
     _uiState.update { s ->
@@ -2182,10 +2187,14 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
         } else {
           s.undoHistory
         }
+      val priorTool =
+        if (s.primaryTool == PrimaryTool.LASSO) s.previousToolBeforeCircleLasso else s.primaryTool
       s.copy(
         notebooks = nbs,
         undoHistory = nextUndo,
         primaryTool = PrimaryTool.LASSO,
+        lassoTriggeredFromCircleGesture = true,
+        previousToolBeforeCircleLasso = priorTool,
         showLassoSelection = true,
         isLassoResizeMode = false,
         isLassoColorMenuOpen = false,
@@ -2203,8 +2212,8 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
 
   /**
    * GoodNotes-style "draw a loop and hold at its end without lifting": converts the in-progress
-   * freehand loop into a lasso selection. Returns false (leaving the ink alone) when the stroke is
-   * not a closed loop or nothing is inside it.
+   * freehand loop into a lasso selection. Returns false (leaving the ink alone for shape snap) when
+   * the stroke is not a closed loop or nothing is inside it while Draw-and-Hold is active.
    */
   fun triggerInstantCircleToLasso(loopPoints: List<Offset>): Boolean {
     val state = _uiState.value
@@ -2212,10 +2221,14 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     val polygon = closedLoopPolygon(loopPoints) ?: return false
     val page = state.notebooks.find { it.id == state.activeTabId }?.currentPage
     val selection = computeLassoSelection(polygon, page, state.lassoFilters)
-    if (selection.totalCount == 0) return false
+    if (selection.totalCount == 0 && state.drawAndHold && !state.showInteractiveTour) return false
     _uiState.update { s ->
+      val priorTool =
+        if (s.primaryTool == PrimaryTool.LASSO) s.previousToolBeforeCircleLasso else s.primaryTool
       s.copy(
         primaryTool = PrimaryTool.LASSO,
+        lassoTriggeredFromCircleGesture = true,
+        previousToolBeforeCircleLasso = priorTool,
         showLassoSelection = true,
         isLassoResizeMode = false,
         isLassoColorMenuOpen = false,
@@ -2398,11 +2411,27 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
   fun commitLassoChanges() {
     val s = _uiState.value
     persistDocumentAsync(s.notebooks.find { it.id == s.activeTabId })
+    if (s.lassoTriggeredFromCircleGesture) {
+      _uiState.update { state ->
+        state.copy(
+          primaryTool = state.previousToolBeforeCircleLasso,
+          lassoTriggeredFromCircleGesture = false,
+        )
+      }
+    }
   }
 
   fun clearLassoSelection() {
     _uiState.update {
+      val nextPrimaryTool =
+        if (it.lassoTriggeredFromCircleGesture && it.primaryTool == PrimaryTool.LASSO) {
+          it.previousToolBeforeCircleLasso
+        } else {
+          it.primaryTool
+        }
       it.copy(
+        primaryTool = nextPrimaryTool,
+        lassoTriggeredFromCircleGesture = false,
         showLassoSelection = false,
         isLassoResizeMode = false,
         isLassoColorMenuOpen = false,
@@ -2446,11 +2475,16 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           )
         }
       savedDoc = modifiedDoc
+      val nextTool =
+        if (state.lassoTriggeredFromCircleGesture) state.previousToolBeforeCircleLasso
+        else state.primaryTool
       state.copy(
         notebooks = updatedNotebooks,
         undoHistory = nextUndo,
         redoHistory = nextRedo,
         selectedColor = color,
+        primaryTool = nextTool,
+        lassoTriggeredFromCircleGesture = false,
         isLassoColorMenuOpen = false,
         statusToastMessage = "Recolored selection",
       )
@@ -2656,18 +2690,22 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
 
   fun dismissLassoSelection() {
     _uiState.update {
+      val restoredTool =
+        if (it.lassoTriggeredFromCircleGesture) it.previousToolBeforeCircleLasso
+        else if (it.primaryTool == PrimaryTool.LASSO) PrimaryTool.WRITING_TOOLS
+        else it.primaryTool
       it.copy(
         showLassoSelection = false,
         isLassoResizeMode = false,
         isLassoColorMenuOpen = false,
+        lassoTriggeredFromCircleGesture = false,
         lassoLoopPoints = emptyList(),
         lassoSelectedStrokeIds = emptySet(),
         lassoSelectedTextBoxIds = emptySet(),
         lassoSelectedElementIds = emptySet(),
         lassoSelectedStickyIds = emptySet(),
         lassoSelectedImageIds = emptySet(),
-        primaryTool =
-          if (it.primaryTool == PrimaryTool.LASSO) PrimaryTool.WRITING_TOOLS else it.primaryTool,
+        primaryTool = restoredTool,
       )
     }
   }
@@ -3676,10 +3714,18 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           }
         }
       savedDoc = modifiedDoc
+      val restoredTool =
+        if (state.lassoTriggeredFromCircleGesture && state.primaryTool == PrimaryTool.LASSO) {
+          state.previousToolBeforeCircleLasso
+        } else {
+          state.primaryTool
+        }
       state.copy(
         notebooks = updated,
         undoHistory = nextUndo,
         redoHistory = nextRedo,
+        primaryTool = restoredTool,
+        lassoTriggeredFromCircleGesture = false,
         showLassoSelection = false,
         isLassoResizeMode = false,
         lassoLoopPoints = emptyList(),
@@ -4107,6 +4153,48 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
     persistDocumentAsync(savedDoc)
   }
 
+  fun updateCurrentNotebookCover(coverStyle: NotebookCoverStyle) {
+    var savedDoc: NotebookDocument? = null
+    _uiState.update { state ->
+      val docId = state.activeTabId
+      val now = System.currentTimeMillis()
+      val updated =
+        state.notebooks.map { nb ->
+          if (nb.id != docId) nb
+          else {
+            nb.copy(
+                coverStyle = coverStyle,
+                timestamp = currentTimestamp(),
+                revision = nb.revision + 1L,
+                updatedAtEpochMs = now,
+              )
+              .also { savedDoc = it }
+          }
+        }
+      state.copy(
+        notebooks = updated,
+        statusToastMessage = "Updated cover to ${coverStyle.label}",
+      )
+    }
+    persistDocumentAsync(savedDoc)
+  }
+
+  fun updateBarrelRollAngle(degrees: Float) {
+    _uiState.update { it.copy(barrelRollAngleDegrees = ((degrees % 360f) + 360f) % 360f) }
+  }
+
+  fun toggleBarrelRollPreview(enabled: Boolean) {
+    _uiState.update { it.copy(barrelRollPreviewEnabled = enabled) }
+  }
+
+  fun openThankYouScreen() {
+    _uiState.update { it.copy(showThankYouScreen = true) }
+  }
+
+  fun closeThankYouScreen() {
+    _uiState.update { it.copy(showThankYouScreen = false) }
+  }
+
   fun selectPageIndex(index: Int) {
     var savedDoc: NotebookDocument? = null
     _uiState.update { state ->
@@ -4391,7 +4479,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
 
   fun advanceInteractiveTourStep() {
     val nextStep = _uiState.value.interactiveTourStep + 1
-    if (nextStep >= 5) {
+    if (nextStep >= 6) {
       dismissInteractiveTour()
       _uiState.update {
         it.copy(statusToastMessage = "Tour complete! You're ready to create.")
@@ -4416,6 +4504,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
             interactiveTourStep = 0,
             primaryTool = PrimaryTool.WRITING_TOOLS,
             activeWritingSubTool = WritingSubTool.PEN,
+            penStyle = PenStyle.FOUNTAIN,
             activePopover = ActivePopover.NONE,
           )
         1 ->
@@ -4423,10 +4512,9 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
             screenMode = ScreenMode.EDITOR,
             showInteractiveTour = true,
             interactiveTourStep = 1,
-            primaryTool = PrimaryTool.SHAPE,
-            shapeAutoDetectMode = false,
-            selectedShapeKind = ShapeKind.STAR,
-            fillShapes = true,
+            primaryTool = PrimaryTool.WRITING_TOOLS,
+            activeWritingSubTool = WritingSubTool.PEN,
+            drawAndHold = true,
             activePopover = ActivePopover.NONE,
           )
         2 ->
@@ -4434,9 +4522,10 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
             screenMode = ScreenMode.EDITOR,
             showInteractiveTour = true,
             interactiveTourStep = 2,
-            primaryTool = PrimaryTool.WRITING_TOOLS,
-            activeWritingSubTool = WritingSubTool.PEN,
-            circleToLasso = true,
+            primaryTool = PrimaryTool.SHAPE,
+            shapeAutoDetectMode = false,
+            selectedShapeKind = ShapeKind.STAR,
+            fillShapes = true,
             activePopover = ActivePopover.NONE,
           )
         3 ->
@@ -4444,6 +4533,16 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
             screenMode = ScreenMode.EDITOR,
             showInteractiveTour = true,
             interactiveTourStep = 3,
+            primaryTool = PrimaryTool.WRITING_TOOLS,
+            activeWritingSubTool = WritingSubTool.PEN,
+            circleToLasso = true,
+            activePopover = ActivePopover.NONE,
+          )
+        4 ->
+          state.copy(
+            screenMode = ScreenMode.EDITOR,
+            showInteractiveTour = true,
+            interactiveTourStep = 4,
             primaryTool = PrimaryTool.LASER,
             laserMode = LaserMode.FADING_TRAIL,
             activePopover = ActivePopover.NONE,
@@ -4452,7 +4551,7 @@ class ProNotesViewModel(application: Application) : AndroidViewModel(application
           state.copy(
             screenMode = ScreenMode.EDITOR,
             showInteractiveTour = true,
-            interactiveTourStep = 4,
+            interactiveTourStep = 5,
             primaryTool = PrimaryTool.ERASER,
             activePopover = ActivePopover.NONE,
           )

@@ -86,7 +86,14 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.layout.offset
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInRoot
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
@@ -94,8 +101,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import com.example.R
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 import com.example.model.DocumentSortOption
 import com.example.model.DocumentType
 import com.example.model.DocumentsSidebarSection
@@ -162,7 +171,32 @@ fun DocumentsScreen(
   var renameInitialTitle by remember { mutableStateOf("") }
   var moveTarget by remember { mutableStateOf<Pair<Boolean, String>?>(null) } // (isFolder, id)
 
+  // Interactive Drag-and-Drop state for dragging Notebooks into Folders and Folders into Folders
+  var activeDragItem by remember { mutableStateOf<Pair<Boolean, String>?>(null) } // (isFolder, id)
+  var activeDragTitle by remember { mutableStateOf("") }
+  var dragPointerInRoot by remember { mutableStateOf(Offset.Zero) }
+  var containerOriginInRoot by remember { mutableStateOf(Offset.Zero) }
+  val folderDropBounds = remember { mutableStateMapOf<String, Rect>() }
+  var rootBreadcrumbBounds by remember { mutableStateOf<Rect?>(null) }
+
   val folderById = remember(folders) { folders.associateBy { it.id } }
+
+  val hoveredDropFolderId: String? =
+    remember(activeDragItem, dragPointerInRoot, folderDropBounds.toMap()) {
+      val dragging = activeDragItem ?: return@remember null
+      val (isDraggingFolder, draggedId) = dragging
+      folderDropBounds.entries.firstOrNull { (candidateFolderId, rect) ->
+        rect.contains(dragPointerInRoot) &&
+          (!isDraggingFolder || (candidateFolderId != draggedId && onCanMoveFolder(draggedId, candidateFolderId)))
+      }?.key
+    }
+
+  val isHoveringRootBreadcrumb: Boolean =
+    remember(activeDragItem, dragPointerInRoot, rootBreadcrumbBounds, currentFolderId) {
+      activeDragItem != null &&
+        currentFolderId != null &&
+        rootBreadcrumbBounds?.contains(dragPointerInRoot) == true
+    }
 
   val visibleFolders =
     remember(folders, notebooks, currentFolderId, selectedSection, searchQuery, sortOption) {
@@ -254,7 +288,15 @@ fun DocumentsScreen(
       }
     }
 
-  BoxWithConstraints(modifier = modifier.fillMaxSize().background(colors.background)) {
+          BoxWithConstraints(
+    modifier =
+      modifier
+        .fillMaxSize()
+        .background(colors.background)
+        .onGloballyPositioned { coords ->
+          containerOriginInRoot = coords.boundsInRoot().topLeft
+        },
+  ) {
     val isCompact = maxWidth < 680.dp
 
     Row(modifier = Modifier.fillMaxSize()) {
@@ -299,7 +341,7 @@ fun DocumentsScreen(
                 DocumentsSidebarSection.DOCUMENTS -> Icons.Outlined.Folder
                 DocumentsSidebarSection.FAVORITES -> Icons.Outlined.StarBorder
                 DocumentsSidebarSection.SHARED -> Icons.Outlined.Description
-                DocumentsSidebarSection.MARKETPLACE -> Icons.Outlined.Draw
+                DocumentsSidebarSection.MARKETPLACE -> Icons.Default.GridView
                 DocumentsSidebarSection.TRASH -> Icons.Default.Delete
               }
             SidebarNavItem(
@@ -577,12 +619,21 @@ fun DocumentsScreen(
             Text(
               text = selectedSection.label,
               color =
-                if (currentFolderId == null) colors.textPrimary else colors.accentBlue,
+                if (isHoveringRootBreadcrumb) Color(0xFF34D399)
+                else if (currentFolderId == null) colors.textPrimary
+                else colors.accentBlue,
               fontSize = 13.sp,
               fontWeight = FontWeight.SemiBold,
               modifier =
                 Modifier
+                  .onGloballyPositioned { coords ->
+                    rootBreadcrumbBounds = coords.boundsInRoot().inflate(12f)
+                  }
                   .clip(RoundedCornerShape(4.dp))
+                  .background(
+                    if (isHoveringRootBreadcrumb) Color(0xFF34D399).copy(alpha = 0.18f)
+                    else Color.Transparent
+                  )
                   .clickable(enabled = currentFolderId != null) { onNavigateToFolder(null) }
                   .padding(horizontal = 4.dp, vertical = 2.dp)
                   .testTag("breadcrumb_root"),
@@ -737,6 +788,27 @@ fun DocumentsScreen(
                 folder = folder,
                 itemCount = childCount,
                 matchingNotebookTitles = matchingNotebooksInFolder.map { it.title },
+                isDropTarget = hoveredDropFolderId == folder.id,
+                isBeingDragged = activeDragItem == (true to folder.id),
+                onBoundsChanged = { rect -> folderDropBounds[folder.id] = rect },
+                onStartDrag = { startRootPos ->
+                  activeDragItem = true to folder.id
+                  activeDragTitle = folder.name
+                  dragPointerInRoot = startRootPos
+                },
+                onDragMove = { delta ->
+                  dragPointerInRoot += delta
+                },
+                onEndDrag = {
+                  val targetId = hoveredDropFolderId
+                  if (targetId != null && targetId != folder.id && onCanMoveFolder(folder.id, targetId)) {
+                    onMoveFolder(folder.id, targetId)
+                  } else if (isHoveringRootBreadcrumb) {
+                    onMoveFolder(folder.id, null)
+                  }
+                  activeDragItem = null
+                },
+                onCancelDrag = { activeDragItem = null },
                 onOpenFolder = {
                   if (!folder.isTrashed) {
                     onNavigateToFolder(folder.id)
@@ -765,6 +837,25 @@ fun DocumentsScreen(
               NotebookGridCard(
                 document = doc,
                 parentFolderName = if (searchQuery.isNotBlank() || currentFolderId == null) parentFolderName else null,
+                isBeingDragged = activeDragItem == (false to doc.id),
+                onStartDrag = { startRootPos ->
+                  activeDragItem = false to doc.id
+                  activeDragTitle = doc.title
+                  dragPointerInRoot = startRootPos
+                },
+                onDragMove = { delta ->
+                  dragPointerInRoot += delta
+                },
+                onEndDrag = {
+                  val targetId = hoveredDropFolderId
+                  if (targetId != null) {
+                    onMoveNotebookToFolder(doc.id, targetId)
+                  } else if (isHoveringRootBreadcrumb) {
+                    onMoveNotebookToFolder(doc.id, null)
+                  }
+                  activeDragItem = null
+                },
+                onCancelDrag = { activeDragItem = null },
                 onClick = { onOpenNotebook(doc.id) },
                 onRename = {
                   renameTarget = false to doc.id
@@ -794,6 +885,26 @@ fun DocumentsScreen(
               FolderListRow(
                 folder = folder,
                 itemCount = childCount,
+                isDropTarget = hoveredDropFolderId == folder.id,
+                onBoundsChanged = { rect -> folderDropBounds[folder.id] = rect },
+                onStartDrag = { startRootPos ->
+                  activeDragItem = true to folder.id
+                  activeDragTitle = folder.name
+                  dragPointerInRoot = startRootPos
+                },
+                onDragMove = { delta ->
+                  dragPointerInRoot += delta
+                },
+                onEndDrag = {
+                  val targetId = hoveredDropFolderId
+                  if (targetId != null && targetId != folder.id && onCanMoveFolder(folder.id, targetId)) {
+                    onMoveFolder(folder.id, targetId)
+                  } else if (isHoveringRootBreadcrumb) {
+                    onMoveFolder(folder.id, null)
+                  }
+                  activeDragItem = null
+                },
+                onCancelDrag = { activeDragItem = null },
                 onOpenFolder = {
                   if (!folder.isTrashed) onNavigateToFolder(folder.id)
                 },
@@ -817,6 +928,24 @@ fun DocumentsScreen(
               NotebookListRow(
                 document = doc,
                 parentFolderName = parentFolderName,
+                onStartDrag = { startRootPos ->
+                  activeDragItem = false to doc.id
+                  activeDragTitle = doc.title
+                  dragPointerInRoot = startRootPos
+                },
+                onDragMove = { delta ->
+                  dragPointerInRoot += delta
+                },
+                onEndDrag = {
+                  val targetId = hoveredDropFolderId
+                  if (targetId != null) {
+                    onMoveNotebookToFolder(doc.id, targetId)
+                  } else if (isHoveringRootBreadcrumb) {
+                    onMoveNotebookToFolder(doc.id, null)
+                  }
+                  activeDragItem = null
+                },
+                onCancelDrag = { activeDragItem = null },
                 onClick = { onOpenNotebook(doc.id) },
                 onRename = {
                   renameTarget = false to doc.id
@@ -829,6 +958,62 @@ fun DocumentsScreen(
                 onDeletePermanently = { onDeletePermanently(doc.id) },
               )
             }
+          }
+        }
+      }
+    }
+
+    // Floating Drag-and-Drop Preview Pill when dragging a Notebook or Folder
+    activeDragItem?.let { (isDraggingFolder, _) ->
+      val targetFolderName = hoveredDropFolderId?.let { folderById[it]?.name }
+      val relX = (dragPointerInRoot.x - containerOriginInRoot.x - 80f).roundToInt()
+      val relY = (dragPointerInRoot.y - containerOriginInRoot.y - 48f).roundToInt()
+      Box(
+        modifier =
+          Modifier
+            .offset { IntOffset(relX, relY) }
+            .shadow(14.dp, RoundedCornerShape(14.dp))
+            .clip(RoundedCornerShape(14.dp))
+            .background(Color(0xEE111827))
+            .border(
+              1.5.dp,
+              if (targetFolderName != null || isHoveringRootBreadcrumb) Color(0xFF34D399)
+              else Color(0xFF38BDF8),
+              RoundedCornerShape(14.dp),
+            )
+            .padding(horizontal = 14.dp, vertical = 9.dp)
+            .testTag("drag_and_drop_floating_preview"),
+      ) {
+        Row(
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          Icon(
+            imageVector = if (isDraggingFolder) Icons.Default.Folder else Icons.Outlined.MenuBook,
+            contentDescription = null,
+            tint = if (targetFolderName != null || isHoveringRootBreadcrumb) Color(0xFF34D399) else Color(0xFF38BDF8),
+            modifier = Modifier.size(18.dp),
+          )
+          Column {
+            Text(
+              text = activeDragTitle,
+              color = Color.White,
+              fontSize = 12.5.sp,
+              fontWeight = FontWeight.Bold,
+              maxLines = 1,
+            )
+            Text(
+              text =
+                when {
+                  targetFolderName != null -> "Release to move into \"$targetFolderName\""
+                  isHoveringRootBreadcrumb -> "Release to move to Root Documents"
+                  else -> "Drag onto any folder to move"
+                },
+              color =
+                if (targetFolderName != null || isHoveringRootBreadcrumb) Color(0xFF6EE7B7)
+                else Color.White.copy(alpha = 0.72f),
+              fontSize = 10.5.sp,
+            )
           }
         }
       }
@@ -951,7 +1136,7 @@ private fun NewCreationDropdownMenu(
       },
       leadingIcon = {
         Icon(
-          imageVector = Icons.Outlined.Draw,
+          imageVector = Icons.Default.GridView,
           contentDescription = null,
           tint = Color(0xFF00ACC1),
         )
@@ -1123,6 +1308,13 @@ private fun FolderGridCard(
   folder: FolderItem,
   itemCount: Int,
   matchingNotebookTitles: List<String> = emptyList(),
+  isDropTarget: Boolean = false,
+  isBeingDragged: Boolean = false,
+  onBoundsChanged: (Rect) -> Unit = {},
+  onStartDrag: (Offset) -> Unit = {},
+  onDragMove: (Offset) -> Unit = {},
+  onEndDrag: () -> Unit = {},
+  onCancelDrag: () -> Unit = {},
   onOpenFolder: () -> Unit,
   onRenameFolder: () -> Unit,
   onChangeFolderColor: (Long) -> Unit = {},
@@ -1133,6 +1325,7 @@ private fun FolderGridCard(
 ) {
   val colors = LocalProNotesColors.current
   var showMenu by remember { mutableStateOf(false) }
+  var cardBoundsInRoot by remember { mutableStateOf(Rect.Zero) }
   val folderColor = folderColorFromArgb(folder.colorArgb)
 
   Column(
@@ -1140,6 +1333,26 @@ private fun FolderGridCard(
     modifier =
       Modifier
         .width(150.dp)
+        .onGloballyPositioned { coords ->
+          val rect = coords.boundsInRoot()
+          cardBoundsInRoot = rect
+          onBoundsChanged(rect)
+        }
+        .pointerInput(folder.id, folder.isTrashed) {
+          if (!folder.isTrashed) {
+            detectDragGesturesAfterLongPress(
+              onDragStart = { localOffset ->
+                onStartDrag(cardBoundsInRoot.topLeft + localOffset)
+              },
+              onDrag = { change, dragAmount ->
+                change.consume()
+                onDragMove(dragAmount)
+              },
+              onDragEnd = onEndDrag,
+              onDragCancel = onCancelDrag,
+            )
+          }
+        }
         .clickable(onClick = onOpenFolder)
         .testTag("folder_card_${folder.id}"),
   ) {
@@ -1150,8 +1363,15 @@ private fun FolderGridCard(
           .width(142.dp)
           .height(186.dp)
           .clip(RoundedCornerShape(14.dp))
-          .background(folderColor.copy(alpha = 0.14f))
-          .border(1.5.dp, folderColor.copy(alpha = 0.42f), RoundedCornerShape(14.dp)),
+          .background(
+            if (isDropTarget) Color(0xFF34D399).copy(alpha = 0.28f)
+            else folderColor.copy(alpha = if (isBeingDragged) 0.08f else 0.14f)
+          )
+          .border(
+            width = if (isDropTarget) 2.5.dp else 1.5.dp,
+            color = if (isDropTarget) Color(0xFF34D399) else folderColor.copy(alpha = 0.42f),
+            shape = RoundedCornerShape(14.dp),
+          ),
       contentAlignment = Alignment.Center,
     ) {
       Icon(
@@ -1332,6 +1552,11 @@ private fun FolderGridCard(
 private fun NotebookGridCard(
   document: NotebookDocument,
   parentFolderName: String? = null,
+  isBeingDragged: Boolean = false,
+  onStartDrag: (Offset) -> Unit = {},
+  onDragMove: (Offset) -> Unit = {},
+  onEndDrag: () -> Unit = {},
+  onCancelDrag: () -> Unit = {},
   onClick: () -> Unit,
   onRename: () -> Unit,
   onMoveToFolder: () -> Unit,
@@ -1342,12 +1567,31 @@ private fun NotebookGridCard(
 ) {
   val colors = LocalProNotesColors.current
   var showCardMenu by remember { mutableStateOf(false) }
+  var cardOriginInRoot by remember { mutableStateOf(Offset.Zero) }
 
   Column(
     horizontalAlignment = Alignment.CenterHorizontally,
     modifier =
       Modifier
         .width(150.dp)
+        .onGloballyPositioned { coords ->
+          cardOriginInRoot = coords.boundsInRoot().topLeft
+        }
+        .pointerInput(document.id, document.isTrashed) {
+          if (!document.isTrashed) {
+            detectDragGesturesAfterLongPress(
+              onDragStart = { localOffset ->
+                onStartDrag(cardOriginInRoot + localOffset)
+              },
+              onDrag = { change, dragAmount ->
+                change.consume()
+                onDragMove(dragAmount)
+              },
+              onDragEnd = onEndDrag,
+              onDragCancel = onCancelDrag,
+            )
+          }
+        }
         .clickable(onClick = onClick)
         .testTag("notebook_card_${document.id}"),
   ) {
@@ -1356,8 +1600,13 @@ private fun NotebookGridCard(
         Modifier
           .width(142.dp)
           .height(186.dp)
-          .shadow(8.dp, RoundedCornerShape(10.dp))
-          .clip(RoundedCornerShape(10.dp)),
+          .shadow(if (isBeingDragged) 2.dp else 8.dp, RoundedCornerShape(10.dp))
+          .clip(RoundedCornerShape(10.dp))
+          .border(
+            width = if (isBeingDragged) 2.dp else 0.dp,
+            color = if (isBeingDragged) Color(0xFF38BDF8) else Color.Transparent,
+            shape = RoundedCornerShape(10.dp),
+          ),
     ) {
       // PRIVACY RULE (Stage 2F): Never expose page content or PDF thumbnails for locked Vault notebooks!
       val firstPdfBitmap =
@@ -1598,6 +1847,12 @@ private fun NotebookGridCard(
 private fun FolderListRow(
   folder: FolderItem,
   itemCount: Int,
+  isDropTarget: Boolean = false,
+  onBoundsChanged: (Rect) -> Unit = {},
+  onStartDrag: (Offset) -> Unit = {},
+  onDragMove: (Offset) -> Unit = {},
+  onEndDrag: () -> Unit = {},
+  onCancelDrag: () -> Unit = {},
   onOpenFolder: () -> Unit,
   onRenameFolder: () -> Unit,
   onChangeFolderColor: (Long) -> Unit = {},
@@ -1608,13 +1863,41 @@ private fun FolderListRow(
 ) {
   val colors = LocalProNotesColors.current
   val folderColor = folderColorFromArgb(folder.colorArgb)
+  var rowBoundsInRoot by remember { mutableStateOf(Rect.Zero) }
   Row(
     modifier =
       Modifier
         .fillMaxWidth()
+        .onGloballyPositioned { coords ->
+          val rect = coords.boundsInRoot()
+          rowBoundsInRoot = rect
+          onBoundsChanged(rect)
+        }
+        .pointerInput(folder.id, folder.isTrashed) {
+          if (!folder.isTrashed) {
+            detectDragGesturesAfterLongPress(
+              onDragStart = { localOffset ->
+                onStartDrag(rowBoundsInRoot.topLeft + localOffset)
+              },
+              onDrag = { change, dragAmount ->
+                change.consume()
+                onDragMove(dragAmount)
+              },
+              onDragEnd = onEndDrag,
+              onDragCancel = onCancelDrag,
+            )
+          }
+        }
         .clip(RoundedCornerShape(12.dp))
-        .background(colors.surfaceVariant)
-        .border(1.dp, folderColor.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+        .background(
+          if (isDropTarget) Color(0xFF34D399).copy(alpha = 0.22f)
+          else colors.surfaceVariant
+        )
+        .border(
+          width = if (isDropTarget) 2.dp else 1.dp,
+          color = if (isDropTarget) Color(0xFF34D399) else folderColor.copy(alpha = 0.45f),
+          shape = RoundedCornerShape(12.dp),
+        )
         .clickable(onClick = onOpenFolder)
         .padding(horizontal = 14.dp, vertical = 10.dp),
     verticalAlignment = Alignment.CenterVertically,
@@ -1702,6 +1985,10 @@ private fun FolderListRow(
 private fun NotebookListRow(
   document: NotebookDocument,
   parentFolderName: String? = null,
+  onStartDrag: (Offset) -> Unit = {},
+  onDragMove: (Offset) -> Unit = {},
+  onEndDrag: () -> Unit = {},
+  onCancelDrag: () -> Unit = {},
   onClick: () -> Unit,
   onRename: () -> Unit,
   onMoveToFolder: () -> Unit,
@@ -1711,10 +1998,29 @@ private fun NotebookListRow(
   onDeletePermanently: () -> Unit,
 ) {
   val colors = LocalProNotesColors.current
+  var rowOriginInRoot by remember { mutableStateOf(Offset.Zero) }
   Row(
     modifier =
       Modifier
         .fillMaxWidth()
+        .onGloballyPositioned { coords ->
+          rowOriginInRoot = coords.boundsInRoot().topLeft
+        }
+        .pointerInput(document.id, document.isTrashed) {
+          if (!document.isTrashed) {
+            detectDragGesturesAfterLongPress(
+              onDragStart = { localOffset ->
+                onStartDrag(rowOriginInRoot + localOffset)
+              },
+              onDrag = { change, dragAmount ->
+                change.consume()
+                onDragMove(dragAmount)
+              },
+              onDragEnd = onEndDrag,
+              onDragCancel = onCancelDrag,
+            )
+          }
+        }
         .clip(RoundedCornerShape(12.dp))
         .background(colors.surfaceVariant)
         .border(1.dp, colors.border, RoundedCornerShape(12.dp))
@@ -1732,7 +2038,7 @@ private fun NotebookListRow(
         imageVector =
           when {
             document.isLockedVault -> Icons.Default.Lock
-            document.documentType == DocumentType.WHITEBOARD -> Icons.Outlined.Draw
+            document.documentType == DocumentType.WHITEBOARD -> Icons.Default.GridView
             else -> Icons.Outlined.MenuBook
           },
         contentDescription = null,

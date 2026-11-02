@@ -135,6 +135,7 @@ fun SettingsScreen(
   onToggleStylusHoverCursor: (Boolean) -> Unit = {},
   onToggleStylusTailEraser: (Boolean) -> Unit = {},
   onUpdateDeveloperUpiInfo: (String, String) -> Unit = { _, _ -> },
+  onOpenThankYouScreen: () -> Unit = {},
   onStartInteractiveTour: () -> Unit = {},
   onEmptyTrash: () -> Unit,
   onResetAllDataToDefaults: () -> Unit,
@@ -146,9 +147,6 @@ fun SettingsScreen(
   val context = LocalContext.current
   var selectedCategory by rememberSaveable { mutableStateOf(SettingsCategory.WRITING) }
 
-  var isEditingUpi by rememberSaveable { mutableStateOf(false) }
-  var upiIdDraft by remember(developerUpiId) { mutableStateOf(developerUpiId) }
-  var devNameDraft by remember(developerDisplayName) { mutableStateOf(developerDisplayName) }
   var upiCopiedRecently by remember { mutableStateOf(false) }
 
   val titleGradient = Brush.linearGradient(
@@ -580,7 +578,7 @@ fun SettingsScreen(
                       .fillMaxWidth()
                       .padding(vertical = 4.dp),
                   ) {
-                    // Support the Developer Card (with customizable UPI ID & Direct UPI Intent)
+                    // Support the Developer Card (Fixed Developer UPI & Rainbow Thank You Screen)
                     Column(
                       modifier = Modifier
                         .fillMaxWidth()
@@ -621,34 +619,31 @@ fun SettingsScreen(
                         Box(
                           modifier = Modifier
                             .clip(RoundedCornerShape(8.dp))
-                            .background(Color.White.copy(alpha = 0.12f))
-                            .clickable { isEditingUpi = !isEditingUpi }
+                            .background(
+                              Brush.linearGradient(
+                                colors = listOf(
+                                  Color(0xFFEC4899),
+                                  Color(0xFF8B5CF6),
+                                  Color(0xFF06B6D4),
+                                ),
+                              ),
+                            )
+                            .clickable(onClick = onOpenThankYouScreen)
                             .padding(horizontal = 10.dp, vertical = 5.dp)
-                            .testTag("settings_edit_upi_button"),
+                            .testTag("settings_open_thank_you_button"),
                         ) {
-                          Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                          ) {
-                            Icon(
-                              imageVector = Icons.Default.Edit,
-                              contentDescription = "Edit UPI ID",
-                              tint = Color.White,
-                              modifier = Modifier.size(13.dp),
-                            )
-                            Text(
-                              text = if (isEditingUpi) "Cancel" else "Set UPI ID",
-                              color = Color.White,
-                              fontSize = 11.5.sp,
-                              fontWeight = FontWeight.SemiBold,
-                            )
-                          }
+                          Text(
+                            text = "Thank You Screen",
+                            color = Color.White,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
+                          )
                         }
                       }
 
                       Spacer(modifier = Modifier.height(6.dp))
                       Text(
-                        text = "Enjoying Pro Notes? Support independent development via UPI.",
+                        text = "Enjoying Pro Notes? Support independent development via UPI or open the Rainbow Thank You experience.",
                         color = Color.White.copy(alpha = 0.78f),
                         fontSize = 12.5.sp,
                         lineHeight = 18.sp,
@@ -656,161 +651,107 @@ fun SettingsScreen(
 
                       Spacer(modifier = Modifier.height(12.dp))
 
-                      if (isEditingUpi) {
-                        OutlinedTextField(
-                          value = devNameDraft,
-                          onValueChange = { devNameDraft = it },
-                          label = { Text("Developer / Payee Name", color = Color.White.copy(alpha = 0.7f)) },
-                          singleLine = true,
-                          colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = SwitchBlue,
-                            unfocusedBorderColor = Color.White.copy(alpha = 0.25f),
-                          ),
-                          modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("settings_dev_name_input"),
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        OutlinedTextField(
-                          value = upiIdDraft,
-                          onValueChange = { upiIdDraft = it },
-                          label = { Text("Your UPI ID (e.g. name@okaxis)", color = Color.White.copy(alpha = 0.7f)) },
-                          singleLine = true,
-                          colors = OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = SwitchBlue,
-                            unfocusedBorderColor = Color.White.copy(alpha = 0.25f),
-                          ),
-                          modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("settings_upi_id_input"),
-                        )
-                        Spacer(modifier = Modifier.height(10.dp))
-                        Box(
-                          modifier = Modifier
-                            .fillMaxWidth()
-                            .height(40.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(NewButtonBlue)
-                            .clickable {
-                              onUpdateDeveloperUpiInfo(upiIdDraft, devNameDraft)
-                              isEditingUpi = false
-                            }
-                            .testTag("settings_save_upi_button"),
-                          contentAlignment = Alignment.Center,
-                        ) {
+                      // Display active UPI ID pill + Copy button (non-editable in-app)
+                      Row(
+                        modifier = Modifier
+                          .fillMaxWidth()
+                          .clip(RoundedCornerShape(10.dp))
+                          .background(Color.Black.copy(alpha = 0.32f))
+                          .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(10.dp))
+                          .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                      ) {
+                        Column(modifier = Modifier.weight(1f)) {
                           Text(
-                            text = "Save UPI ID",
-                            color = Color.White,
-                            fontSize = 13.5.sp,
+                            text = developerDisplayName,
+                            color = Color.White.copy(alpha = 0.7f),
+                            fontSize = 11.sp,
+                          )
+                          Text(
+                            text = developerUpiId,
+                            color = Color(0xFF67C8EB),
+                            fontSize = 14.5.sp,
                             fontWeight = FontWeight.Bold,
+                            modifier = Modifier.testTag("settings_upi_id_text"),
                           )
                         }
-                      } else {
-                        // Display active UPI ID pill + Copy button
-                        Row(
+                        Box(
                           modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Color.Black.copy(alpha = 0.32f))
-                            .border(1.dp, Color.White.copy(alpha = 0.14f), RoundedCornerShape(10.dp))
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                          verticalAlignment = Alignment.CenterVertically,
-                          horizontalArrangement = Arrangement.SpaceBetween,
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(Color.White.copy(alpha = 0.14f))
+                            .clickable {
+                              val clipboard =
+                                context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                              clipboard?.setPrimaryClip(ClipData.newPlainText("UPI ID", developerUpiId))
+                              upiCopiedRecently = true
+                              Toast.makeText(context, "Copied UPI ID: $developerUpiId", Toast.LENGTH_SHORT).show()
+                            }
+                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                            .testTag("settings_copy_upi_button"),
                         ) {
-                          Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                              text = developerDisplayName,
-                              color = Color.White.copy(alpha = 0.7f),
-                              fontSize = 11.sp,
-                            )
-                            Text(
-                              text = developerUpiId,
-                              color = Color(0xFF67C8EB),
-                              fontSize = 14.5.sp,
-                              fontWeight = FontWeight.Bold,
-                              modifier = Modifier.testTag("settings_upi_id_text"),
-                            )
-                          }
-                          Box(
-                            modifier = Modifier
-                              .clip(RoundedCornerShape(8.dp))
-                              .background(Color.White.copy(alpha = 0.14f))
-                              .clickable {
-                                val clipboard =
-                                  context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                clipboard?.setPrimaryClip(ClipData.newPlainText("UPI ID", developerUpiId))
-                                upiCopiedRecently = true
-                                Toast.makeText(context, "Copied UPI ID: $developerUpiId", Toast.LENGTH_SHORT).show()
-                              }
-                              .padding(horizontal = 10.dp, vertical = 6.dp)
-                              .testTag("settings_copy_upi_button"),
+                          Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
                           ) {
-                            Row(
-                              verticalAlignment = Alignment.CenterVertically,
-                              horizontalArrangement = Arrangement.spacedBy(4.dp),
-                            ) {
-                              Icon(
-                                imageVector = if (upiCopiedRecently) Icons.Default.Check else Icons.Default.ContentCopy,
-                                contentDescription = "Copy UPI ID",
-                                tint = Color.White,
-                                modifier = Modifier.size(14.dp),
-                              )
-                              Text(
-                                text = if (upiCopiedRecently) "Copied" else "Copy UPI",
-                                color = Color.White,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold,
-                              )
-                            }
+                            Icon(
+                              imageVector = if (upiCopiedRecently) Icons.Default.Check else Icons.Default.ContentCopy,
+                              contentDescription = "Copy UPI ID",
+                              tint = Color.White,
+                              modifier = Modifier.size(14.dp),
+                            )
+                            Text(
+                              text = if (upiCopiedRecently) "Copied" else "Copy UPI",
+                              color = Color.White,
+                              fontSize = 12.sp,
+                              fontWeight = FontWeight.SemiBold,
+                            )
                           }
                         }
+                      }
 
-                        Spacer(modifier = Modifier.height(10.dp))
+                      Spacer(modifier = Modifier.height(10.dp))
 
-                        // Launch UPI Payment App button
-                        Box(
-                          modifier = Modifier
-                            .fillMaxWidth()
-                            .height(44.dp)
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Color(0xFF10B981))
-                            .clickable {
-                              runCatching {
-                                val upiUri =
-                                  Uri.parse("upi://pay")
-                                    .buildUpon()
-                                    .appendQueryParameter("pa", developerUpiId.trim())
-                                    .appendQueryParameter("pn", developerDisplayName.trim())
-                                    .appendQueryParameter("tn", "Support Pro Notes Development")
-                                    .appendQueryParameter("cu", "INR")
-                                    .build()
-                                val intent = Intent(Intent.ACTION_VIEW, upiUri)
-                                context.startActivity(intent)
-                              }.onFailure {
-                                val clipboard =
-                                  context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                clipboard?.setPrimaryClip(ClipData.newPlainText("UPI ID", developerUpiId))
-                                Toast.makeText(
-                                  context,
-                                  "No UPI app found. Copied $developerUpiId to clipboard!",
-                                  Toast.LENGTH_SHORT,
-                                ).show()
-                              }
+                      // Launch UPI Payment App button
+                      Box(
+                        modifier = Modifier
+                          .fillMaxWidth()
+                          .height(44.dp)
+                          .clip(RoundedCornerShape(10.dp))
+                          .background(Color(0xFF10B981))
+                          .clickable {
+                            runCatching {
+                              val upiUri =
+                                Uri.parse("upi://pay")
+                                  .buildUpon()
+                                  .appendQueryParameter("pa", developerUpiId.trim())
+                                  .appendQueryParameter("pn", developerDisplayName.trim())
+                                  .appendQueryParameter("tn", "Support Pro Notes Development")
+                                  .appendQueryParameter("cu", "INR")
+                                  .build()
+                              val intent = Intent(Intent.ACTION_VIEW, upiUri)
+                              context.startActivity(intent)
+                            }.onFailure {
+                              val clipboard =
+                                context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                              clipboard?.setPrimaryClip(ClipData.newPlainText("UPI ID", developerUpiId))
+                              Toast.makeText(
+                                context,
+                                "No UPI app found. Copied $developerUpiId to clipboard!",
+                                Toast.LENGTH_SHORT,
+                              ).show()
                             }
-                            .testTag("settings_pay_upi_button"),
-                          contentAlignment = Alignment.Center,
-                        ) {
-                          Text(
-                            text = "Support via UPI App (GPay / PhonePe / Paytm)",
-                            color = Color.White,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                          )
-                        }
+                            onOpenThankYouScreen()
+                          }
+                          .testTag("settings_pay_upi_button"),
+                        contentAlignment = Alignment.Center,
+                      ) {
+                        Text(
+                          text = "Support via UPI App (GPay / PhonePe / Paytm)",
+                          color = Color.White,
+                          fontSize = 13.sp,
+                          fontWeight = FontWeight.Bold,
+                        )
                       }
                     }
 

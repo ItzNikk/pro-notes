@@ -62,6 +62,7 @@ import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.outlined.CenterFocusStrong
 import androidx.compose.material.icons.outlined.Colorize
 import androidx.compose.material.icons.outlined.ContentPaste
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material.icons.outlined.OpenInFull
@@ -103,6 +104,7 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
@@ -115,6 +117,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerType
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalViewConfiguration
 import com.example.util.StylusInputTracker
@@ -536,15 +539,20 @@ fun EditorScreen(
         )
       }
 
-      // 3. DOCKED CONTEXTUAL SECONDARY TOOL STRIP (Pen styles, thicknesses, color swatches)
-      if (!isReadOnlyMode && primaryTool != PrimaryTool.LASSO) {
+      // 3. DOCKED CONTEXTUAL SECONDARY TOOL STRIP (Pen styles, thicknesses, color swatches, or exclusive Laser color bar)
+      if (!isReadOnlyMode && primaryTool != PrimaryTool.LASSO && primaryTool != PrimaryTool.ERASER) {
+        val totalBarrelRollDeg =
+          (StylusInputTracker.barrelRollDegrees + uiState.barrelRollAngleDegrees) % 360f
         DockedContextualWritingStrip(
+          primaryTool = primaryTool,
           activeWritingSubTool = activeWritingSubTool,
           enabledWritingSubTools = enabledWritingSubTools,
           strokePattern = strokePattern,
           selectedThicknessIndex = selectedThicknessIndex,
           quickSwatches = quickSwatches,
           selectedSwatchIndex = selectedSwatchIndex,
+          selectedColor = selectedColor,
+          barrelRollDegrees = totalBarrelRollDeg,
           isPenPopoverOpen =
             activePopover == ActivePopover.PEN_SETTINGS ||
               activePopover == ActivePopover.HIGHLIGHTER_SETTINGS,
@@ -554,6 +562,9 @@ fun EditorScreen(
           onSelectThicknessIndex = onSelectThicknessIndex,
           onSelectQuickSwatch = onSelectQuickSwatch,
           onOpenColorPicker = { onTogglePopover(ActivePopover.PEN_COLOR) },
+          onRotateBarrelRoll = {
+            viewModel.updateBarrelRollAngle(uiState.barrelRollAngleDegrees + 30f)
+          },
         )
       }
 
@@ -867,42 +878,30 @@ fun EditorScreen(
                       ) {
                         if (!isCurrentActivePage) return@pointerInput
                         awaitEachGesture {
-                          val currentPrimaryTool = primaryToolRef.value
-                          val currentSubTool = activeSubToolRef.value
-                          val currentEraserRadius = eraserRadiusRef.value
-                          val currentStabilization = strokeStabilizationRef.value
-                          val currentHighlighterStraight = highlighterStraightRef.value
-                          val currentDrawAndHold = drawAndHoldRef.value
-                          val currentHoldToErase = holdToEraseRef.value
-                          val currentCircleToLasso = circleToLassoRef.value
-                          val currentBarrelButtonActive = barrelButtonActiveRef.value
-                          val currentBarrelAction = barrelActionRef.value
-                          val currentPressureSens = pressureSensRef.value
-                          val currentTailEraserEnabled = tailEraserEnabledRef.value
-                          val currentOnlyStylus = onlyStylusRef.value
-                          val currentPalmSens = palmSensRef.value
-                          val currentLeftHanded = leftHandedRef.value
-                          val currentRuler = rulerStateRef.value
-                          val currentShowLasso = showLassoRef.value
-                          val currentEyedropper = eyedropperRef.value
-
                           var activeDown = awaitFirstDown(requireUnconsumed = false)
+                          // Read latest refs AFTER awaitFirstDown so switching tools (e.g., to Laser)
+                          // immediately applies on the very first stroke!
+                          val initialTailEraserEnabled = tailEraserEnabledRef.value
+                          val initialOnlyStylus = onlyStylusRef.value
+                          val initialPalmSens = palmSensRef.value
+                          val initialLeftHanded = leftHandedRef.value
+
                           // Stylus, eraser tail and mouse are precision pointers; only fingers are "touch".
                           var isStylusDown =
                             activeDown.type == PointerType.Stylus ||
                               activeDown.type == PointerType.Eraser ||
                               activeDown.type == PointerType.Mouse
                           var isHardwareEraserTail =
-                            currentTailEraserEnabled &&
+                            initialTailEraserEnabled &&
                               (activeDown.type == PointerType.Eraser ||
                                 (isStylusDown && hardwareStylusState.isEraserTail))
 
                           // Edge Palm-Guard Zone when drawing with Touch
                           val canvasWidthPx = size.width.toFloat()
-                          val edgeGuardWidth = (currentPalmSens / 100f) * 58f
+                          val edgeGuardWidth = (initialPalmSens / 100f) * 58f
                           val inEdgeGuard =
                             edgeGuardWidth > 12f &&
-                              if (currentLeftHanded) {
+                              if (initialLeftHanded) {
                                 activeDown.position.x < edgeGuardWidth
                               } else {
                                 activeDown.position.x > (canvasWidthPx - edgeGuardWidth)
@@ -910,10 +909,10 @@ fun EditorScreen(
                           // A finger landing while the pen hovers over the screen is a resting palm.
                           val inPalmZone =
                             !isStylusDown &&
-                              !currentOnlyStylus &&
+                              !initialOnlyStylus &&
                               (inEdgeGuard || hardwareStylusState.isStylusNear())
 
-                          if (inPalmZone || isReadOnlyMode || (currentOnlyStylus && !isStylusDown)) {
+                          if (inPalmZone || isReadOnlyMode || (initialOnlyStylus && !isStylusDown)) {
                             var promotedStylusChange: androidx.compose.ui.input.pointer.PointerInputChange? = null
                             do {
                               val moveEvt = awaitPointerEvent()
@@ -957,13 +956,28 @@ fun EditorScreen(
                               activeDown = promotedStylusChange
                               isStylusDown = true
                               isHardwareEraserTail =
-                                currentTailEraserEnabled &&
+                                tailEraserEnabledRef.value &&
                                   (promotedStylusChange.type == PointerType.Eraser ||
                                     hardwareStylusState.isEraserTail)
                             } else {
                               return@awaitEachGesture
                             }
                           }
+
+                          val currentPrimaryTool = primaryToolRef.value
+                          val currentSubTool = activeSubToolRef.value
+                          val currentEraserRadius = eraserRadiusRef.value
+                          val currentStabilization = strokeStabilizationRef.value
+                          val currentHighlighterStraight = highlighterStraightRef.value
+                          val currentDrawAndHold = drawAndHoldRef.value
+                          val currentHoldToErase = holdToEraseRef.value
+                          val currentCircleToLasso = circleToLassoRef.value
+                          val currentBarrelButtonActive = barrelButtonActiveRef.value
+                          val currentBarrelAction = barrelActionRef.value
+                          val currentPressureSens = pressureSensRef.value
+                          val currentRuler = rulerStateRef.value
+                          val currentShowLasso = showLassoRef.value
+                          val currentEyedropper = eyedropperRef.value
 
                           // Consume down IMMEDIATELY so HorizontalPager/VerticalPager never steals a stylus stroke
                           activeDown.consume()
@@ -1225,9 +1239,12 @@ fun EditorScreen(
                               var lastMoveTimeMs = System.currentTimeMillis()
                               var lastPressure = startPressure
                               var circleLassoHoldTriggered = false
+                              var holdLassoPrevDragPos = startPoint
+                              var holdLassoMovedSelection = false
                               var switchedToTwoFingerZoom = false
                               var loopCandidate = false
                               var switchToErase = false
+                              var snappedHoldShapeKind: ShapeKind? = null
 
                               val isHighlighterSub =
                                 currentPrimaryTool == PrimaryTool.WRITING_TOOLS &&
@@ -1245,7 +1262,8 @@ fun EditorScreen(
 
                               // Adds one raw stylus sample (position + pressure) to the live stroke.
                               fun appendInkSample(rawPos: Offset, pressureVal: Float, nowMs: Long) {
-                                if ((rawPos - lastMovePoint).getDistance() > holdSlop) {
+                                val movedDist = (rawPos - lastMovePoint).getDistance()
+                                if (movedDist > holdSlop) {
                                   lastMovePoint = rawPos
                                   lastMoveTimeMs = nowMs
                                   circleLassoHoldProgress = 0f
@@ -1264,6 +1282,23 @@ fun EditorScreen(
                                     }
                                     else -> rawPos
                                   }
+
+                                // Goodnotes & Samsung Notes Draw-and-Hold behavior:
+                                // Once a stroke snaps into a geometric shape on hold, dragging while still
+                                // holding adjusts the snapped shape's endpoint/scale/orientation live!
+                                if (isDrawingSnappedHold && snappedHoldShapeKind != null && !isHighlighterSub) {
+                                  if (movedDist > 2.5f) {
+                                    val draggedPts =
+                                      com.example.model.buildShapePreviewPoints(
+                                        points = listOf(startPoint, constrainedPos),
+                                        kind = snappedHoldShapeKind!!,
+                                      ).first
+                                    inProgressPoints.clear()
+                                    inProgressPoints.addAll(draggedPts)
+                                  }
+                                  return
+                                }
+
                                 val stabilizedPos =
                                   if (currentStabilization > 0f && inProgressPoints.isNotEmpty() && !isExplicitShapeTool) {
                                     val lastPt = inProgressPoints.last()
@@ -1287,7 +1322,7 @@ fun EditorScreen(
                                   var candidateEpoch = -1L
                                   var lassoAttemptEpoch = -1L
                                   while (true) {
-                                    delay(35L)
+                                    delay(30L)
                                     val totalDisplacement =
                                       (lastMovePoint - startPoint).getDistance()
                                     val stationaryMs = System.currentTimeMillis() - lastMoveTimeMs
@@ -1296,10 +1331,10 @@ fun EditorScreen(
                                     // the pen resting at its end, and the loop becomes a lasso.
                                     if (currentCircleToLasso && isPenInk && !circleLassoHoldTriggered) {
                                       if (inProgressPoints.size <= 14) {
-                                        if (stationaryMs >= 120L) {
+                                        if (stationaryMs >= 110L) {
                                           circleLassoHoldCenter = lastMovePoint
                                           circleLassoHoldProgress =
-                                            ((stationaryMs - 120f) / (CIRCLE_LASSO_HOLD_MS - 120f))
+                                            ((stationaryMs - 110f) / (CIRCLE_LASSO_HOLD_MS - 110f))
                                               .coerceIn(0f, 1f)
                                         }
                                         // Pen came back down on the end of the loop it just drew.
@@ -1310,6 +1345,7 @@ fun EditorScreen(
                                           lassoAttemptEpoch = lastMoveTimeMs
                                           if (onTryConvertCircleStrokeToLassoAtHold(lastMovePoint)) {
                                             circleLassoHoldTriggered = true
+                                            holdLassoPrevDragPos = lastMovePoint
                                             circleLassoHoldProgress = 0f
                                             inProgressPoints.clear()
                                             inProgressPressures.clear()
@@ -1320,14 +1356,14 @@ fun EditorScreen(
                                           }
                                         }
                                       } else {
-                                        if (stationaryMs >= 150L && candidateEpoch != lastMoveTimeMs) {
+                                        if (stationaryMs >= 120L && candidateEpoch != lastMoveTimeMs) {
                                           candidateEpoch = lastMoveTimeMs
                                           loopCandidate = isClosedCircleLoop(inProgressPoints)
                                         }
-                                        if (loopCandidate && stationaryMs >= 150L) {
+                                        if (loopCandidate && stationaryMs >= 120L) {
                                           circleLassoHoldCenter = lastMovePoint
                                           circleLassoHoldProgress =
-                                            ((stationaryMs - 150f) / (CIRCLE_LASSO_HOLD_MS - 150f))
+                                            ((stationaryMs - 120f) / (CIRCLE_LASSO_HOLD_MS - 120f))
                                               .coerceIn(0f, 1f)
                                         }
                                         if (
@@ -1338,6 +1374,7 @@ fun EditorScreen(
                                           lassoAttemptEpoch = lastMoveTimeMs
                                           if (onTriggerInstantCircleToLasso(inProgressPoints.toList())) {
                                             circleLassoHoldTriggered = true
+                                            holdLassoPrevDragPos = lastMovePoint
                                             circleLassoHoldProgress = 0f
                                             inProgressPoints.clear()
                                             inProgressPressures.clear()
@@ -1356,11 +1393,23 @@ fun EditorScreen(
                                         !isDrawingSnappedHold &&
                                         !circleLassoHoldTriggered &&
                                         !loopCandidate &&
-                                        totalDisplacement > 28f &&
-                                        stationaryMs > 380L
+                                        (totalDisplacement > 22f || inProgressPoints.size >= 10) &&
+                                        stationaryMs > 320L
                                     ) {
+                                      val detectedKind =
+                                        viewModel.autoDetectShapeKind(inProgressPoints.toList())
+                                      snappedHoldShapeKind = detectedKind
+                                      val snappedGeom =
+                                        com.example.model.buildShapePreviewPoints(
+                                          inProgressPoints.toList(),
+                                          detectedKind,
+                                        ).first
+                                      if (snappedGeom.size >= 2) {
+                                        inProgressPoints.clear()
+                                        inProgressPoints.addAll(snappedGeom)
+                                      }
                                       isDrawingSnappedHold = true
-                                      haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                      haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     }
                                   }
                                 }
@@ -1397,14 +1446,25 @@ fun EditorScreen(
                                     break
                                   }
 
-                                  if (circleLassoHoldTriggered) continue
+                                  if (circleLassoHoldTriggered) {
+                                    val dragDelta = change.position - holdLassoPrevDragPos
+                                    if (dragDelta.getDistance() > 0.6f) {
+                                      if (!holdLassoMovedSelection) {
+                                        onRecordUndoBeforeGesture()
+                                        holdLassoMovedSelection = true
+                                      }
+                                      onMoveLassoSelection(dragDelta)
+                                      holdLassoPrevDragPos = change.position
+                                    }
+                                    continue
+                                  }
 
                                   val nowMs = System.currentTimeMillis()
                                   val endPressure =
                                     (change.pressure * currentPressureSens).coerceIn(0.15f, 1.5f)
 
                                   val history = change.historical
-                                  if (history.isNotEmpty()) {
+                                  if (history.isNotEmpty() && !isDrawingSnappedHold) {
                                     val n = history.size
                                     for (h in 0 until n) {
                                       val t = (h + 1f) / (n + 1f)
@@ -1421,6 +1481,9 @@ fun EditorScreen(
                               } finally {
                                 holdWatcher.cancel()
                                 circleLassoHoldProgress = 0f
+                              }
+                              if (circleLassoHoldTriggered && holdLassoMovedSelection) {
+                                onCommitLassoChanges()
                               }
                               if (switchToErase) {
                                 inProgressPoints.clear()
@@ -1846,6 +1909,46 @@ fun EditorScreen(
                       center = eraserCursorPos,
                       style = Stroke(width = 2f),
                     )
+                  }
+
+                  // Apple Pencil Pro / Active Stylus Barrel Roll Live Nib & Color Preview
+                  if (
+                    uiState.barrelRollPreviewEnabled &&
+                      uiState.stylusHoverCursorEnabled &&
+                      primaryTool == PrimaryTool.WRITING_TOOLS &&
+                      !eraserActive
+                  ) {
+                    val activeTipPos =
+                      if (inProgressPoints.isNotEmpty()) inProgressPoints.last()
+                      else StylusInputTracker.hoverScreenPosition
+                    if (activeTipPos != null) {
+                      val rollDeg =
+                        (StylusInputTracker.barrelRollDegrees + uiState.barrelRollAngleDegrees) % 360f
+                      val rollRad = Math.toRadians(rollDeg.toDouble())
+                      val nibHalfLen =
+                        if (activeWritingSubTool == WritingSubTool.HIGHLIGHTER) 16f else 11f
+                      val dx = (cos(rollRad) * nibHalfLen).toFloat()
+                      val dy = (sin(rollRad) * nibHalfLen).toFloat()
+                      drawCircle(
+                        color = selectedColor.copy(alpha = 0.16f),
+                        radius = nibHalfLen + 7f,
+                        center = activeTipPos,
+                      )
+                      drawCircle(
+                        color = selectedColor.copy(alpha = 0.72f),
+                        radius = nibHalfLen + 7f,
+                        center = activeTipPos,
+                        style = Stroke(width = 1.6f),
+                      )
+                      drawLine(
+                        color = selectedColor,
+                        start = Offset(activeTipPos.x - dx, activeTipPos.y - dy),
+                        end = Offset(activeTipPos.x + dx, activeTipPos.y + dy),
+                        strokeWidth =
+                          if (activeWritingSubTool == WritingSubTool.HIGHLIGHTER) 5.5f else 3.5f,
+                        cap = StrokeCap.Round,
+                      )
+                    }
                   }
                 }
 
@@ -2536,6 +2639,77 @@ fun EditorScreen(
                 )
               }
             }
+
+            // Pull to Add Page & More Page / Cover Options Bar at the bottom of the page
+            if (pullToAddPage) {
+              Row(
+                modifier =
+                  Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 12.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color(0xE01A2234))
+                    .border(1.dp, Color(0xFF38BDF8).copy(alpha = 0.45f), RoundedCornerShape(16.dp))
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .testTag("pull_to_add_page_bar"),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+              ) {
+                Row(
+                  modifier =
+                    Modifier
+                      .clip(RoundedCornerShape(8.dp))
+                      .clickable { onAddNewPage() }
+                      .padding(horizontal = 6.dp, vertical = 3.dp)
+                      .testTag("pull_add_page_quick_button"),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                  Icon(
+                    imageVector = Icons.Default.Add,
+                    contentDescription = "Pull or Tap to Add Page",
+                    tint = Color(0xFF38BDF8),
+                    modifier = Modifier.size(15.dp),
+                  )
+                  Text(
+                    text = "Pull or Tap + Page",
+                    color = Color.White,
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.SemiBold,
+                  )
+                }
+                Box(
+                  modifier =
+                    Modifier
+                      .width(1.dp)
+                      .height(14.dp)
+                      .background(Color.White.copy(alpha = 0.22f)),
+                )
+                Row(
+                  modifier =
+                    Modifier
+                      .clip(RoundedCornerShape(8.dp))
+                      .clickable { viewModel.togglePopover(ActivePopover.ADD_PAGE_DIALOG) }
+                      .padding(horizontal = 6.dp, vertical = 3.dp)
+                      .testTag("pull_page_options_button"),
+                  verticalAlignment = Alignment.CenterVertically,
+                  horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                  Icon(
+                    imageVector = Icons.Outlined.Description,
+                    contentDescription = "Page Templates & Cover Options",
+                    tint = Color(0xFFF59E0B),
+                    modifier = Modifier.size(14.dp),
+                  )
+                  Text(
+                    text = "Templates & Cover",
+                    color = Color(0xFFFDE68A),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                  )
+                }
+              }
+            }
           }
 
           // Active Popovers Anchored Cleanly Below Top Docked Bars
@@ -2703,6 +2877,8 @@ fun EditorScreen(
                       currentPage.pageColorTheme
                         ?: activeDocument?.paperColorTheme
                         ?: PaperColorTheme.PURE_WHITE,
+                    currentCoverStyle =
+                      activeDocument?.coverStyle ?: com.example.model.NotebookCoverStyle.KRAFT_TAN,
                     customTemplates = customTemplates,
                     canDeleteCurrentPage = (activeDocument?.pages?.size ?: 1) > 1,
                     onAddPageWithTemplate = { tmpl, theme, customTmpl, posMode ->
@@ -2712,6 +2888,9 @@ fun EditorScreen(
                     onApplyTemplateToCurrentPage = { tmpl, theme, customTmpl ->
                       onChangeCurrentPageTemplate(tmpl, theme, customTmpl)
                       onDismissPopover()
+                    },
+                    onUpdateNotebookCover = { newCover ->
+                      viewModel.updateCurrentNotebookCover(newCover)
                     },
                     onDuplicateCurrentPage = {
                       onDuplicateCurrentPage()
@@ -2739,10 +2918,12 @@ fun EditorScreen(
           if (uiState.showInteractiveTour) {
             InteractiveFeatureTourOverlay(
               step = uiState.interactiveTourStep,
+              selectedStylusBrand = uiState.selectedStylusBrand,
               strokeCount = currentPage.strokes.size,
               shapeCount = currentPage.strokes.count { it.isShape },
               showLassoSelection = showLassoSelection,
               laserTrailCount = laserTrails.size,
+              onSelectStylusBrand = viewModel::selectStylusBrand,
               onPrevStep = viewModel::previousInteractiveTourStep,
               onNextStep = viewModel::advanceInteractiveTourStep,
               onDismiss = viewModel::dismissInteractiveTour,
@@ -3258,12 +3439,15 @@ private fun DockedMainToolbar(
  */
 @Composable
 private fun DockedContextualWritingStrip(
+  primaryTool: PrimaryTool,
   activeWritingSubTool: WritingSubTool,
   enabledWritingSubTools: Set<WritingSubTool>,
   strokePattern: StrokePattern,
   selectedThicknessIndex: Int,
   quickSwatches: List<Color>,
   selectedSwatchIndex: Int,
+  selectedColor: Color,
+  barrelRollDegrees: Float,
   isPenPopoverOpen: Boolean,
   isColorPopoverOpen: Boolean,
   isEyedropperActive: Boolean,
@@ -3271,6 +3455,7 @@ private fun DockedContextualWritingStrip(
   onSelectThicknessIndex: (Int) -> Unit,
   onSelectQuickSwatch: (Int) -> Unit,
   onOpenColorPicker: () -> Unit,
+  onRotateBarrelRoll: () -> Unit,
 ) {
   Box(
     modifier =
@@ -3288,103 +3473,174 @@ private fun DockedContextualWritingStrip(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-      // Writing Sub-Tools (Pen, Pencil, Highlighter, Tape, Draw Shape)
-      WritingSubTool.entries
-        .filter { enabledWritingSubTools.contains(it) }
-        .forEachIndexed { idx, subTool ->
-          val isSelected = activeWritingSubTool == subTool
-          if (isSelected) {
-            Row(
-              modifier =
-                Modifier
-                  .height(34.dp)
-                  .clip(RoundedCornerShape(8.dp))
-                  .background(
-                    if (isPenPopoverOpen) SubToolbarActiveCyan.copy(alpha = 0.28f)
-                    else SubToolbarActiveTeal
-                  )
-                  .clickable { onSelectWritingSubTool(subTool) }
-                  .padding(horizontal = 9.dp)
-                  .testTag(
-                    if (subTool == WritingSubTool.PEN) "subtoolbar_pen_style_button"
-                    else "subtoolbar_writing_${subTool.name.lowercase()}"
-                  ),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.spacedBy(3.dp),
-            ) {
-              WritingSubToolCustomIcon(
-                subTool = subTool,
-                tint = SubToolbarActiveCyan,
-                modifier = Modifier.size(19.dp),
-              )
-              Icon(
-                imageVector = Icons.Default.KeyboardArrowDown,
-                contentDescription = subTool.label,
-                tint = ToolbarIconLight,
-                modifier = Modifier.size(14.dp),
-              )
+      if (primaryTool == PrimaryTool.LASER) {
+        // Exclusive Laser Pointer Mode: no other writing tool is shown as selected!
+        Row(
+          modifier =
+            Modifier
+              .height(32.dp)
+              .clip(RoundedCornerShape(8.dp))
+              .background(selectedColor.copy(alpha = 0.22f))
+              .border(1.dp, selectedColor.copy(alpha = 0.7f), RoundedCornerShape(8.dp))
+              .padding(horizontal = 10.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Box(
+            modifier =
+              Modifier
+                .size(8.dp)
+                .clip(CircleShape)
+                .background(selectedColor),
+          )
+          Text(
+            text = "Laser Pointer Color",
+            color = Color.White,
+            fontSize = 11.5.sp,
+            fontWeight = FontWeight.Bold,
+          )
+        }
+      } else {
+        // Writing Sub-Tools (Pen, Pencil, Highlighter, Tape, Draw Shape)
+        WritingSubTool.entries
+          .filter { enabledWritingSubTools.contains(it) }
+          .forEachIndexed { idx, subTool ->
+            val isSelected =
+              primaryTool == PrimaryTool.WRITING_TOOLS && activeWritingSubTool == subTool
+            if (isSelected) {
+              Row(
+                modifier =
+                  Modifier
+                    .height(34.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(
+                      if (isPenPopoverOpen) SubToolbarActiveCyan.copy(alpha = 0.28f)
+                      else SubToolbarActiveTeal
+                    )
+                    .clickable { onSelectWritingSubTool(subTool) }
+                    .padding(horizontal = 9.dp)
+                    .testTag(
+                      if (subTool == WritingSubTool.PEN) "subtoolbar_pen_style_button"
+                      else "subtoolbar_writing_${subTool.name.lowercase()}"
+                    ),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+              ) {
+                WritingSubToolCustomIcon(
+                  subTool = subTool,
+                  tint = SubToolbarActiveCyan,
+                  modifier = Modifier.size(19.dp),
+                )
+                Icon(
+                  imageVector = Icons.Default.KeyboardArrowDown,
+                  contentDescription = subTool.label,
+                  tint = ToolbarIconLight,
+                  modifier = Modifier.size(14.dp),
+                )
+              }
+            } else {
+              Box(
+                modifier =
+                  Modifier
+                    .size(34.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onSelectWritingSubTool(subTool) }
+                    .testTag(
+                      if (subTool == WritingSubTool.PEN) "subtoolbar_pen_style_button"
+                      else "subtoolbar_mode_$idx"
+                    ),
+                contentAlignment = Alignment.Center,
+              ) {
+                WritingSubToolCustomIcon(
+                  subTool = subTool,
+                  tint = ToolbarIconLight.copy(alpha = 0.9f),
+                  modifier = Modifier.size(19.dp),
+                )
+              }
             }
-          } else {
-            Box(
-              modifier =
-                Modifier
-                  .size(34.dp)
-                  .clip(RoundedCornerShape(8.dp))
-                  .clickable { onSelectWritingSubTool(subTool) }
-                  .testTag(
-                    if (subTool == WritingSubTool.PEN) "subtoolbar_pen_style_button"
-                    else "subtoolbar_mode_$idx"
-                  ),
-              contentAlignment = Alignment.Center,
-            ) {
-              WritingSubToolCustomIcon(
-                subTool = subTool,
-                tint = ToolbarIconLight.copy(alpha = 0.9f),
-                modifier = Modifier.size(19.dp),
+          }
+
+        Box(
+          modifier =
+            Modifier
+              .padding(horizontal = 4.dp)
+              .width(1.dp)
+              .height(20.dp)
+              .background(SubToolbarBorder),
+        )
+
+        // Stroke Thickness Slots (Thin, Medium, Thick)
+        val lineHeights = listOf(2.dp, 3.8.dp, 6.dp)
+        lineHeights.forEachIndexed { index, barHeight ->
+          val isSelected = selectedThicknessIndex == index
+          Box(
+            modifier =
+              Modifier
+                .size(32.dp)
+                .clip(RoundedCornerShape(7.dp))
+                .background(if (isSelected) Color.White.copy(alpha = 0.14f) else Color.Transparent)
+                .clickable { onSelectThicknessIndex(index) }
+                .testTag("thickness_slot_$index"),
+            contentAlignment = Alignment.Center,
+          ) {
+            if (strokePattern == StrokePattern.SOLID) {
+              Box(
+                modifier =
+                  Modifier
+                    .width(18.dp)
+                    .height(barHeight)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(if (isSelected) Color.White else TextSecondaryGray),
+              )
+            } else {
+              StrokePatternIcon(
+                pattern = strokePattern,
+                tint = if (isSelected) Color.White else TextSecondaryGray,
+                modifier = Modifier.width(19.dp).height(13.dp),
               )
             }
           }
         }
 
-      Box(
-        modifier =
-          Modifier
-            .padding(horizontal = 4.dp)
-            .width(1.dp)
-            .height(20.dp)
-            .background(SubToolbarBorder),
-      )
-
-      // Stroke Thickness Slots (Thin, Medium, Thick)
-      val lineHeights = listOf(2.dp, 3.8.dp, 6.dp)
-      lineHeights.forEachIndexed { index, barHeight ->
-        val isSelected = selectedThicknessIndex == index
-        Box(
+        // Apple Pencil Pro Style Barrel Roll Nib & Color Preview Pill
+        Row(
           modifier =
             Modifier
-              .size(32.dp)
-              .clip(RoundedCornerShape(7.dp))
-              .background(if (isSelected) Color.White.copy(alpha = 0.14f) else Color.Transparent)
-              .clickable { onSelectThicknessIndex(index) }
-              .testTag("thickness_slot_$index"),
-          contentAlignment = Alignment.Center,
+              .height(30.dp)
+              .clip(RoundedCornerShape(8.dp))
+              .background(Color.White.copy(alpha = 0.08f))
+              .border(1.dp, selectedColor.copy(alpha = 0.55f), RoundedCornerShape(8.dp))
+              .clickable(onClick = onRotateBarrelRoll)
+              .padding(horizontal = 8.dp)
+              .testTag("barrel_roll_preview_pill"),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(5.dp),
         ) {
-          if (strokePattern == StrokePattern.SOLID) {
-            Box(
-              modifier =
-                Modifier
-                  .width(18.dp)
-                  .height(barHeight)
-                  .clip(RoundedCornerShape(3.dp))
-                  .background(if (isSelected) Color.White else TextSecondaryGray),
+          Canvas(modifier = Modifier.size(16.dp)) {
+            val c = Offset(size.width / 2f, size.height / 2f)
+            val rad = Math.toRadians(barrelRollDegrees.toDouble())
+            val r = size.minDimension * 0.42f
+            val dx = (cos(rad) * r).toFloat()
+            val dy = (sin(rad) * r).toFloat()
+            drawCircle(
+              color = selectedColor.copy(alpha = 0.25f),
+              radius = r + 2f,
+              center = c,
             )
-          } else {
-            StrokePatternIcon(
-              pattern = strokePattern,
-              tint = if (isSelected) Color.White else TextSecondaryGray,
-              modifier = Modifier.width(19.dp).height(13.dp),
+            drawLine(
+              color = selectedColor,
+              start = Offset(c.x - dx, c.y - dy),
+              end = Offset(c.x + dx, c.y + dy),
+              strokeWidth = 3.5f,
+              cap = StrokeCap.Round,
             )
           }
+          Text(
+            text = "${barrelRollDegrees.roundToInt()}°",
+            color = TextPrimaryWhite,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+          )
         }
       }
 
@@ -3474,10 +3730,12 @@ private fun DockedContextualWritingStrip(
 private fun AddPageAndTemplatePopover(
   currentTemplate: PaperTemplate,
   currentColorTheme: PaperColorTheme,
+  currentCoverStyle: com.example.model.NotebookCoverStyle,
   customTemplates: List<CustomPageTemplate>,
   canDeleteCurrentPage: Boolean,
   onAddPageWithTemplate: (PaperTemplate, PaperColorTheme, CustomPageTemplate?, Int) -> Unit,
   onApplyTemplateToCurrentPage: (PaperTemplate, PaperColorTheme, CustomPageTemplate?) -> Unit,
+  onUpdateNotebookCover: (com.example.model.NotebookCoverStyle) -> Unit,
   onDuplicateCurrentPage: () -> Unit,
   onDeleteCurrentPage: () -> Unit,
   onImportCustomTemplate: () -> Unit,
@@ -3486,6 +3744,7 @@ private fun AddPageAndTemplatePopover(
 ) {
   var selectedTemplate by remember { mutableStateOf(currentTemplate) }
   var selectedColorTheme by remember { mutableStateOf(currentColorTheme) }
+  var selectedCover by remember { mutableStateOf(currentCoverStyle) }
   var selectedCustomTemplate by remember { mutableStateOf<CustomPageTemplate?>(null) }
   // 0 = After Current Page, 1 = Before Current Page, 2 = End of Document
   var insertPositionMode by remember { mutableIntStateOf(0) }
@@ -3498,7 +3757,7 @@ private fun AddPageAndTemplatePopover(
   Column(
     modifier =
       Modifier
-        .widthIn(max = 390.dp)
+        .widthIn(max = 410.dp)
         .fillMaxWidth(0.94f)
         .shadow(20.dp, RoundedCornerShape(16.dp))
         .clip(RoundedCornerShape(16.dp))
@@ -3513,7 +3772,7 @@ private fun AddPageAndTemplatePopover(
       verticalAlignment = Alignment.CenterVertically,
     ) {
       Text(
-        text = "Add Page & Paper Template",
+        text = "Page Templates, Options & Cover",
         color = TextPrimaryWhite,
         fontSize = 15.sp,
         fontWeight = FontWeight.Bold,
@@ -3524,6 +3783,72 @@ private fun AddPageAndTemplatePopover(
         tint = TextSecondaryGray,
         modifier = Modifier.size(18.dp).clickable(onClick = onDismiss),
       )
+    }
+
+    Spacer(modifier = Modifier.height(10.dp))
+
+    // Notebook Cover Option Selector
+    Text(
+      text = "NOTEBOOK COVER STYLE",
+      color = TextSecondaryGray,
+      fontSize = 10.sp,
+      fontWeight = FontWeight.SemiBold,
+    )
+    Spacer(modifier = Modifier.height(5.dp))
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      com.example.model.NotebookCoverStyle.entries.forEach { cover ->
+        val isSel = selectedCover == cover
+        val coverTint =
+          when (cover) {
+            com.example.model.NotebookCoverStyle.KRAFT_TAN -> Color(0xFFC29B61)
+            com.example.model.NotebookCoverStyle.CHARCOAL_DARK -> Color(0xFF2B2D38)
+            com.example.model.NotebookCoverStyle.WHITE_DOCUMENT -> Color(0xFFF4F1EA)
+            com.example.model.NotebookCoverStyle.WHITEBOARD -> Color(0xFF00ACC1)
+            com.example.model.NotebookCoverStyle.HANDWRITTEN_NOTES -> Color(0xFF3B82F6)
+            com.example.model.NotebookCoverStyle.GRID_PAPER -> Color(0xFFE6EBF2)
+          }
+        Row(
+          modifier =
+            Modifier
+              .weight(1f)
+              .height(30.dp)
+              .clip(RoundedCornerShape(8.dp))
+              .background(if (isSel) SwitchBlue.copy(alpha = 0.25f) else PopoverInnerBg)
+              .border(
+                width = if (isSel) 1.5.dp else 1.dp,
+                color = if (isSel) SwitchBlue else PopoverDivider,
+                shape = RoundedCornerShape(8.dp),
+              )
+              .clickable {
+                selectedCover = cover
+                onUpdateNotebookCover(cover)
+              }
+              .padding(horizontal = 5.dp)
+              .testTag("editor_cover_option_${cover.name.lowercase()}"),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.Center,
+        ) {
+          Box(
+            modifier =
+              Modifier
+                .size(11.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(coverTint)
+                .border(0.8.dp, Color.White.copy(alpha = 0.5f), RoundedCornerShape(3.dp)),
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+          Text(
+            text = cover.label.substringBefore(" "),
+            color = TextPrimaryWhite,
+            fontSize = 9.5.sp,
+            fontWeight = if (isSel) FontWeight.Bold else FontWeight.Medium,
+            maxLines = 1,
+          )
+        }
+      }
     }
 
     Spacer(modifier = Modifier.height(10.dp))
@@ -4375,15 +4700,30 @@ private fun DockedShapeStudioStrip(
 @Composable
 private fun InteractiveFeatureTourOverlay(
   step: Int,
+  selectedStylusBrand: com.example.model.StylusPenBrand,
   strokeCount: Int,
   shapeCount: Int,
   showLassoSelection: Boolean,
   laserTrailCount: Int,
+  onSelectStylusBrand: (com.example.model.StylusPenBrand) -> Unit,
   onPrevStep: () -> Unit,
   onNextStep: () -> Unit,
   onDismiss: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val context = LocalContext.current
+  val detectedHardware =
+    remember(StylusInputTracker.detectedHardwareBrand, StylusInputTracker.detectedDeviceName) {
+      StylusInputTracker.detectConnectedStylusHardware(context)
+    }
+
+  // Auto-apply detected stylus profile on Step 0
+  LaunchedEffect(step, detectedHardware.first) {
+    if (step == 0 && detectedHardware.first != selectedStylusBrand) {
+      onSelectStylusBrand(detectedHardware.first)
+    }
+  }
+
   val baselineStrokes = remember(step) { strokeCount }
   val baselineShapes = remember(step) { shapeCount }
   val baselineLasers = remember(step) { laserTrailCount }
@@ -4391,42 +4731,64 @@ private fun InteractiveFeatureTourOverlay(
   val stepCompleted =
     when (step) {
       0 -> strokeCount > baselineStrokes
-      1 -> shapeCount > baselineShapes || strokeCount > baselineStrokes
-      2 -> showLassoSelection
-      3 -> laserTrailCount > baselineLasers
+      1 -> shapeCount > baselineShapes
+      2 -> shapeCount > baselineShapes || strokeCount > baselineStrokes
+      3 -> showLassoSelection
+      4 -> laserTrailCount > baselineLasers
       else -> strokeCount < baselineStrokes
     }
 
   val title =
     when (step) {
-      0 -> "Step 1 of 5 · Zero-Lag Pen & Stylus Ink"
-      1 -> "Step 2 of 5 · Live Shape Studio (11 Shapes)"
-      2 -> "Step 3 of 5 · Circle-to-Lasso Gesture"
-      3 -> "Step 4 of 5 · Color-Synced Laser Pointer"
-      else -> "Step 5 of 5 · Precision & Side-Button Eraser"
+      0 -> "Step 1 of 6 · Stylus Auto-Detect & Barrel Roll"
+      1 -> "Step 2 of 6 · Draw & Hold Shape Snap"
+      2 -> "Step 3 of 6 · Live Shape Studio (11 Geometries)"
+      3 -> "Step 4 of 6 · Circle-to-Lasso & Auto-Return"
+      4 -> "Step 5 of 6 · Exclusive Color Laser Pointer"
+      else -> "Step 6 of 6 · Side-Button Erase & Pull Page"
     }
 
   val instruction =
     when (step) {
-      0 -> "Try writing or sketching anywhere on this page right now. Notice how the ink responds with pressure & zero lag!"
-      1 -> "Drag across the page to draw a live Star, or tap any of the 11 shapes in the Shape Studio bar above to draw & adjust vertices."
-      2 -> "Draw a closed circle around your strokes and hold your pen still at the end for 0.4s — watch it morph into a Lasso selection!"
-      3 -> "Pick any color swatch in the top bar and glide across the canvas to project a glowing, pointer-free laser trail."
-      else -> "Swipe across your strokes (or hold your stylus side button while writing) to erase with smooth fade-out."
+      0 ->
+        "Detected: ${detectedHardware.first.label} (${detectedHardware.second}). Write on the canvas to test live pressure (${(StylusInputTracker.livePressure * 100).roundToInt()}%) & barrel roll (${StylusInputTracker.barrelRollDegrees.roundToInt()}°)!"
+      1 ->
+        "Sketch a rough circle, triangle, box, or line and HOLD your stylus tip still for 0.3s at the end — watch it snap into crisp geometry! Keep holding & drag to resize."
+      2 ->
+        "Drag across the page to draw a live Star, or tap any of the 11 shapes in the Shape Studio strip above to draw & drag vertex handles."
+      3 ->
+        "Draw a closed loop around your strokes and hold briefly at the end — it turns into a Lasso selection, and automatically returns to your Pen after you move or edit!"
+      4 ->
+        "Notice no other tool is selected while Laser is active! Pick any color swatch above and glide across the page for a glowing laser trail."
+      else ->
+        "Swipe across strokes (or hold your stylus barrel button) to erase smoothly, or pull the bottom '+ Page' bar to add new pages & covers!"
     }
+
+  val demoAnimProgress by
+    rememberInfiniteTransition(label = "tourVisualDemo")
+      .animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(2200, easing = LinearEasing)),
+        label = "tourDemoProgress",
+      )
 
   Column(
     modifier =
       modifier
-        .widthIn(max = 520.dp)
+        .widthIn(max = 550.dp)
         .fillMaxWidth()
-        .shadow(16.dp, RoundedCornerShape(20.dp))
-        .clip(RoundedCornerShape(20.dp))
-        .background(Color(0xF5171A24))
+        .shadow(18.dp, RoundedCornerShape(22.dp))
+        .clip(RoundedCornerShape(22.dp))
+        .background(
+          Brush.verticalGradient(
+            colors = listOf(Color(0xF5181C29), Color(0xF8111520))
+          )
+        )
         .border(
           width = 1.5.dp,
           color = if (stepCompleted) Color(0xFF4CAF50) else Color(0xFF4C8DF6),
-          shape = RoundedCornerShape(20.dp),
+          shape = RoundedCornerShape(22.dp),
         )
         .padding(16.dp)
         .testTag("interactive_tour_coach_card"),
@@ -4451,7 +4813,7 @@ private fun InteractiveFeatureTourOverlay(
               .padding(horizontal = 8.dp, vertical = 4.dp),
         ) {
           Text(
-            text = if (stepCompleted) "✓ GREAT JOB!" else "HANDS-ON TOUR",
+            text = if (stepCompleted) "✓ FEATURE VERIFIED" else "IMMERSIVE TOUR",
             color = if (stepCompleted) Color(0xFF81C784) else Color(0xFF67C8EB),
             fontSize = 10.sp,
             fontWeight = FontWeight.Bold,
@@ -4477,12 +4839,106 @@ private fun InteractiveFeatureTourOverlay(
       )
     }
 
-    Spacer(modifier = Modifier.height(6.dp))
+    Spacer(modifier = Modifier.height(8.dp))
+
+    // Animated Visual Preview Strip + Live Stylus Telemetry Badge
+    Row(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .height(54.dp)
+          .clip(RoundedCornerShape(12.dp))
+          .background(Color(0xFF0E121B))
+          .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(12.dp))
+          .padding(horizontal = 12.dp, vertical = 6.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+      Canvas(modifier = Modifier.weight(1f).fillMaxHeight()) {
+        val w = size.width
+        val h = size.height
+        val p = demoAnimProgress
+        when (step) {
+          0 -> {
+            // Animated wave + rotating barrel roll nib
+            val path = Path().apply {
+              moveTo(w * 0.05f, h * 0.5f)
+              cubicTo(w * 0.28f, h * 0.1f, w * 0.52f, h * 0.9f, w * 0.82f * p.coerceAtLeast(0.15f), h * 0.5f)
+            }
+            drawPath(path, color = Color(0xFF67C8EB), style = Stroke(width = 4f, cap = StrokeCap.Round))
+            val tipX = w * 0.82f * p.coerceAtLeast(0.15f)
+            drawCircle(Color(0xFF4C8DF6).copy(alpha = 0.3f), radius = 10f, center = Offset(tipX, h * 0.5f))
+          }
+          1, 2 -> {
+            // Animated freehand morphing into crisp rectangle & star
+            val cx = w * 0.45f
+            val cy = h * 0.5f
+            drawCircle(
+              color = if (p > 0.5f) Color(0xFF4CAF50) else Color(0xFF67C8EB),
+              radius = h * 0.36f,
+              center = Offset(cx, cy),
+              style = Stroke(width = if (p > 0.5f) 4f else 2.5f),
+            )
+          }
+          3 -> {
+            // Animated marching-ants circle-to-lasso loop
+            drawCircle(
+              color = SwitchBlue,
+              radius = h * 0.36f,
+              center = Offset(w * 0.45f, h * 0.5f),
+              style = Stroke(
+                width = 3f,
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), p * 24f),
+              ),
+            )
+          }
+          else -> {
+            // Animated glowing laser trail
+            val endX = w * (0.15f + 0.7f * p)
+            drawLine(
+              color = Color(0xFFF43F5E).copy(alpha = 0.35f),
+              start = Offset(w * 0.12f, h * 0.5f),
+              end = Offset(endX, h * 0.5f),
+              strokeWidth = 14f,
+              cap = StrokeCap.Round,
+            )
+            drawLine(
+              color = Color.White,
+              start = Offset(w * 0.12f, h * 0.5f),
+              end = Offset(endX, h * 0.5f),
+              strokeWidth = 3.5f,
+              cap = StrokeCap.Round,
+            )
+          }
+        }
+      }
+
+      Spacer(modifier = Modifier.width(10.dp))
+
+      Column(horizontalAlignment = Alignment.End) {
+        Text(
+          text = selectedStylusBrand.label,
+          color = Color(0xFF67C8EB),
+          fontSize = 11.sp,
+          fontWeight = FontWeight.Bold,
+        )
+        Text(
+          text =
+            if (StylusInputTracker.isStylusActive) "Live Stylus Signal Active"
+            else "Auto-Calibrated & Ready",
+          color = if (StylusInputTracker.isStylusActive) Color(0xFF81C784) else TextSecondaryGray,
+          fontSize = 9.5.sp,
+        )
+      }
+    }
+
+    Spacer(modifier = Modifier.height(8.dp))
 
     Text(
       text = instruction,
       color = Color(0xFFD5D9E4),
       fontSize = 12.sp,
+      lineHeight = 17.sp,
     )
 
     Spacer(modifier = Modifier.height(12.dp))
@@ -4492,9 +4948,9 @@ private fun InteractiveFeatureTourOverlay(
       horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically,
     ) {
-      // Progress Dots
+      // Progress Dots (6 steps)
       Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-        for (i in 0 until 5) {
+        for (i in 0 until 6) {
           Box(
             modifier =
               Modifier
@@ -4546,7 +5002,7 @@ private fun InteractiveFeatureTourOverlay(
           contentAlignment = Alignment.Center,
         ) {
           Text(
-            text = if (step >= 4) "Finish Tour" else if (stepCompleted) "Next Feature →" else "Next Step →",
+            text = if (step >= 5) "Finish Tour" else if (stepCompleted) "Next Feature →" else "Next Step →",
             color = Color.White,
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,

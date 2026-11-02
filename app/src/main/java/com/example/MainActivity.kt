@@ -83,6 +83,7 @@ import com.example.ui.screens.DocumentsScreen
 import com.example.ui.screens.EditorScreen
 import com.example.ui.screens.OnboardingScreen
 import com.example.ui.screens.SettingsScreen
+import com.example.ui.screens.ThankYouScreen
 import com.example.ui.theme.LocalProNotesColors
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.theme.NewButtonBlue
@@ -275,12 +276,20 @@ fun ProNotesAppRoot(
         .background(colors.background)
         .windowInsetsPadding(WindowInsets.safeDrawing),
   ) {
-    if (showOnboarding) {
+    if (uiState.showThankYouScreen) {
+      BackHandler { viewModel.closeThankYouScreen() }
+      ThankYouScreen(
+        onClose = { viewModel.closeThankYouScreen() },
+      )
+    } else if (showOnboarding) {
       OnboardingScreen(
         onStartCreating = { completeOnboarding() },
         onTakeTour = {
           completeOnboarding()
           viewModel.startInteractiveTour()
+        },
+        onStylusAutoDetected = { brand ->
+          viewModel.selectStylusBrand(brand)
         },
       )
     } else when (uiState.screenMode) {
@@ -396,6 +405,7 @@ fun ProNotesAppRoot(
           onToggleStylusHoverCursor = viewModel::toggleStylusHoverCursor,
           onToggleStylusTailEraser = viewModel::toggleStylusTailEraser,
           onUpdateDeveloperUpiInfo = viewModel::updateDeveloperUpiInfo,
+          onOpenThankYouScreen = viewModel::openThankYouScreen,
           onStartInteractiveTour = viewModel::startInteractiveTour,
           onEmptyTrash = viewModel::emptyTrash,
           onResetAllDataToDefaults = viewModel::clearAllLocalStorage,
